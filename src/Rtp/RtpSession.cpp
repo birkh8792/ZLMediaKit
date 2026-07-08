@@ -15,6 +15,9 @@
 #include "Rtsp/Rtsp.h"
 #include "Rtsp/RtpReceiver.h"
 #include "Common/config.h"
+#if defined(ENABLE_RTPPROXY)
+#include "Jt1078.h"
+#endif
 
 using namespace std;
 using namespace toolkit;
@@ -61,6 +64,15 @@ void RtpSession::onRecv(const Buffer::Ptr &data) {
         onRtpPacket(data->data(), data->size());
         return;
     }
+    if (_jt1078_mode) {
+        onJt1078Data(data->data(), data->size());
+        return;
+    }
+    if (isJt1078(data->data(), data->size())) {
+        _jt1078_mode = true;
+        onJt1078Data(data->data(), data->size());
+        return;
+    }
     RtpSplitter::input(data->data(), data->size());
 }
 
@@ -82,7 +94,32 @@ void RtpSession::setRtpProcess(RtpProcess::Ptr process) {
     _process = std::move(process);
 }
 
+void RtpSession::onJt1078Data(const char *data, size_t len) {
+    if (!_process) {
+        _process = RtpProcess::createProcess(_tuple);
+        _process->setOnlyTrack((RtpProcess::OnlyTrack)_only_track);
+        weak_ptr<RtpSession> weak_self = static_pointer_cast<RtpSession>(shared_from_this());
+        _process->setOnDetach([weak_self](const SockException &ex) {
+            if (auto strong_self = weak_self.lock()) {
+                strong_self->safeShutdown(ex);
+            }
+        });
+    }
+    try {
+        _process->inputJt1078(_is_udp, getSock(), data, len, (struct sockaddr *)&_addr);
+    } catch (std::exception &ex) {
+        shutdown(SockException(Err_shutdown, ex.what()));
+        return;
+    }
+    _ticker.resetTime();
+}
+
 void RtpSession::onRtpPacket(const char *data, size_t len) {
+    if (!_jt1078_mode && isJt1078(data, len)) {
+        _jt1078_mode = true;
+        onJt1078Data(data, len);
+        return;
+    }
     if (!isRtp(data, len)) {
         // 忽略非rtp数据  [AUTO-TRANSLATED:771b77d8]
         // Ignore non-rtp data

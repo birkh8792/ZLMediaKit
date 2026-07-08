@@ -574,6 +574,10 @@ extern const std::string kRtpG711DurMs;
 extern const std::string kUdpRecvSocketBuffer;
 // ps/ts解析后是否等待下一帧以判断本帧是否完整，开启后提高兼容性，但是可能增加延时
 extern const std::string kMergeFrame;
+// JT/T 1078 固定端口，0 表示禁用
+extern const std::string kJt1078Port;
+// JT/T 1078 协议版本: 2013/2016/2019
+extern const std::string kJt1078Version;
 } // namespace RtpProxy
 
 /**

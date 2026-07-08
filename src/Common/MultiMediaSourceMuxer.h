@@ -163,6 +163,12 @@ public:
     void startSendRtp(const MediaSourceEvent::SendRtpArgs &args, const std::function<void(uint16_t, const toolkit::SockException &)> cb);
 
     /**
+     * 在已有 TCP 连接上发送 JT/T 1078 码流(HTTP-1078 拉流)
+     */
+    RingType::RingReader::Ptr startSendJt1078OnSocket(const toolkit::Socket::Ptr &sock, const std::string &sim, uint8_t channel,
+                                                      const std::string &version = "2016");
+
+    /**
      * 停止ps-rtp发送
      * @return 是否成功
      * Stop ps-rtp sending

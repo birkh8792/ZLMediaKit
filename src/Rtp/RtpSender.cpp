@@ -11,6 +11,7 @@
 #if defined(ENABLE_RTPPROXY)
 #include "RtpSender.h"
 #include "RtpSession.h"
+#include "Jt1078Encoder.h"
 #include "Rtsp/RtspSession.h"
 #include "Thread/WorkThreadPool.h"
 #include "Util/uv_errno.h"
@@ -46,6 +47,11 @@ void RtpSender::startSend(const MediaSourceEvent &sender, const MediaSourceEvent
             case MediaSourceEvent::SendRtpArgs::kRtpPS: _interface = std::make_shared<RtpCachePS>(lam, stoll(args.ssrc), args.pt, true); break;
             case MediaSourceEvent::SendRtpArgs::kRtpTS: _interface = std::make_shared<RtpCachePS>(lam, stoll(args.ssrc), args.pt, false); break;
             case MediaSourceEvent::SendRtpArgs::kRtpES: _interface = std::make_shared<RtpCacheRaw>(lam, stoll(args.ssrc), args.pt, args.only_audio); break;
+            case MediaSourceEvent::SendRtpArgs::kRtpJt1078: {
+                Jt1078Version ver = args.jt1078_version == "2019" ? Jt1078Version::V2019 : Jt1078Version::V2013;
+                _interface = std::make_shared<RtpCacheJt1078>(lam, ver, args.jt1078_sim, args.jt1078_channel);
+                break;
+            }
             default: CHECK(0, "invalid rtp type: " + to_string(args.data_type)); break;
         }
     }

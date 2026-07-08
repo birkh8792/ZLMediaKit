@@ -1627,6 +1627,15 @@ void installWebApi() {
         args.recv_stream_app = allArgs["app"];
         args.recv_stream_vhost = allArgs["vhost"];
         args.enable_origin_recv_limit = allArgs["enable_origin_recv_limit"];
+        if (!allArgs["jt1078_sim"].empty()) {
+            args.jt1078_sim = allArgs["jt1078_sim"];
+        }
+        if (!allArgs["jt1078_channel"].empty()) {
+            args.jt1078_channel = allArgs["jt1078_channel"].as<int>();
+        }
+        if (!allArgs["jt1078_version"].empty()) {
+            args.jt1078_version = allArgs["jt1078_version"];
+        }
         src->getOwnerPoller()->async([=]() mutable {
             try {
                 src->startSendRtp(args, [val, headerOut, invoker](uint16_t local_port, const SockException &ex) mutable {

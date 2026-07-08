@@ -106,7 +106,8 @@ public:
         enum DataType {
             kRtpES = 0, // 发送ES流
             kRtpPS = 1, // 发送PS流
-            kRtpTS = 2 // 发送TS流
+            kRtpTS = 2, // 发送TS流
+            kRtpJt1078 = 3, // 发送JT/T 1078流
         };
 
         enum ConType {
@@ -167,6 +168,12 @@ public:
 
         // rtp tcp模式发送时busy时, origin 接收限流, 默认不启用
         bool enable_origin_recv_limit = false;
+
+        // JT/T 1078 专用: SIM卡号(BCD十六进制字符串)与逻辑通道号
+        std::string jt1078_sim;
+        uint8_t jt1078_channel = 1;
+        // JT/T 1078 协议版本: 2013/2016 或 2019
+        std::string jt1078_version = "2016";
     };
 
 private:

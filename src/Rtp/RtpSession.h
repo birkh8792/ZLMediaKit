@@ -42,6 +42,7 @@ protected:
     // 收到rtp回调  [AUTO-TRANSLATED:446b2cda]
     // Received RTP callback
     void onRtpPacket(const char *data, size_t len) override;
+    void onJt1078Data(const char *data, size_t len);
     // RtpSplitter override
     const char *onSearchPacketTail(const char *data, size_t len) override;
     // 搜寻SSRC  [AUTO-TRANSLATED:2cfec2e1]
@@ -56,6 +57,7 @@ private:
     bool _search_rtp = false;
     bool _search_rtp_finished = false;
     bool _emit_detach = false;
+    bool _jt1078_mode = false;
     int _only_track = 0;
     uint32_t _ssrc = 0;
     toolkit::Ticker _ticker;

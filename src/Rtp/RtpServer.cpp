@@ -12,6 +12,7 @@
 #include "Util/uv_errno.h"
 #include "RtpServer.h"
 #include "RtpProcess.h"
+#include "Jt1078.h"
 #include "Rtcp/RtcpContext.h"
 #include "Common/config.h"
 
@@ -177,6 +178,14 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         auto ssrc_ptr = std::make_shared<uint32_t>(ssrc);
         _ssrc = ssrc_ptr;
         rtp_socket->setOnRead([rtp_socket, helper, ssrc_ptr, bind_peer_addr](const Buffer::Ptr &buf, struct sockaddr *addr, int addr_len) mutable {
+            if (isJt1078(buf->data(), buf->size())) {
+                if (!bind_peer_addr) {
+                    bind_peer_addr = true;
+                    rtp_socket->bindPeerAddr(addr, addr_len);
+                }
+                helper->onRecvRtp(rtp_socket, buf, addr);
+                return;
+            }
             RtpHeader *header = (RtpHeader *)buf->data();
             auto rtp_ssrc = ntohl(header->ssrc);
             auto ssrc = *ssrc_ptr;

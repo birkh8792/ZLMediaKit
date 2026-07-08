@@ -51,6 +51,11 @@ public:
      */
     bool inputRtp(bool is_udp, const toolkit::Socket::Ptr &sock, const char *data, size_t len, const struct sockaddr *addr , uint64_t *dts_out = nullptr);
 
+    /**
+     * 输入 JT/T 1078 码流数据
+     */
+    bool inputJt1078(bool is_udp, const toolkit::Socket::Ptr &sock, const char *data, size_t len, const struct sockaddr *addr, uint64_t *dts_out = nullptr);
+
 
     /**
      * 超时时被RtpSelector移除时触发
@@ -128,7 +133,13 @@ private:
     void onManager();
     void createTimer();
 
+    void tryUpdateStreamFromJt1078(const char *data, size_t len);
+    uint32_t makeJt1078FakeSsrc() const;
+
 private:
+    bool _jt1078_mode = false;
+    bool _publish_emitted = false;
+    std::string _jt1078_sim;
     bool _pause_timeout = false;
     uint32_t _pause_seconds = 5 * 60;
     uint64_t _dts = 0;

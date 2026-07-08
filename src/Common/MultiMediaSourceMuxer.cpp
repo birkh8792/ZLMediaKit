@@ -11,6 +11,9 @@
 #include <math.h>
 #include "Common/config.h"
 #include "MultiMediaSourceMuxer.h"
+#if defined(ENABLE_RTPPROXY)
+#include "Rtp/Jt1078Encoder.h"
+#endif
 #include "Thread/WorkThreadPool.h"
 
 using namespace std;
@@ -618,6 +621,45 @@ void MultiMediaSourceMuxer::startSendRtp(const MediaSourceEvent::SendRtpArgs &ar
     cb(0, SockException(Err_other, "该功能未启用，编译时请打开ENABLE_RTPPROXY宏"));
 #endif//ENABLE_RTPPROXY
 }
+
+#if defined(ENABLE_RTPPROXY)
+class Jt1078SocketSender : public Jt1078EncoderImp {
+public:
+    Jt1078SocketSender(toolkit::Socket::Ptr sock, Jt1078Version version, const std::string &sim, uint8_t channel)
+        : Jt1078EncoderImp(version, sim, channel), _sock(std::move(sock)) {}
+
+protected:
+    void onPacket(toolkit::Buffer::Ptr packet) override {
+        if (_sock) {
+            _sock->send(std::move(packet));
+        }
+    }
+
+private:
+    toolkit::Socket::Ptr _sock;
+};
+
+MultiMediaSourceMuxer::RingType::RingReader::Ptr MultiMediaSourceMuxer::startSendJt1078OnSocket(const toolkit::Socket::Ptr &sock, const std::string &sim, uint8_t channel,
+                                                                                                  const std::string &version) {
+    createGopCacheIfNeed(1);
+    auto ring = _ring;
+    auto poller = getOwnerPoller(MediaSource::NullMediaSource());
+    Jt1078Version ver = version == "2019" ? Jt1078Version::V2019 : Jt1078Version::V2013;
+    auto sender = std::make_shared<Jt1078SocketSender>(sock, ver, sim, channel);
+    for (auto &track : getTracks(false)) {
+        sender->addTrack(track);
+    }
+    sender->addTrackCompleted();
+    auto reader = ring->attach(poller);
+    reader->setReadCB([sender](const Frame::Ptr &frame) { sender->inputFrame(frame); });
+    reader->setDetachCB([sock]() {
+        if (sock) {
+            sock->closeSock();
+        }
+    });
+    return reader;
+}
+#endif
 
 bool MultiMediaSourceMuxer::stopSendRtp(const string &ssrc) {
 #if defined(ENABLE_RTPPROXY)
