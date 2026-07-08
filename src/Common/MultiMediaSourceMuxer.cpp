@@ -662,7 +662,7 @@ private:
 
 MultiMediaSourceMuxer::RingType::RingReader::Ptr MultiMediaSourceMuxer::startSendJt1078OnSocket(const toolkit::Socket::Ptr &sock, const std::string &sim, uint8_t channel,
                                                                                                   const std::string &version) {
-    createGopCacheIfNeed(1);
+    createGopCacheIfNeed();
     auto ring = _ring;
     auto poller = getOwnerPoller(MediaSource::NullMediaSource());
     Jt1078Version ver = version == "2019" ? Jt1078Version::V2019 : Jt1078Version::V2013;
