@@ -245,7 +245,8 @@ void installWebApi();
 void unInstallWebApi();
 
 #if defined(ENABLE_RTPPROXY)
-uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const std::string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex=false);
+uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const std::string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex = false,
+                       int jt1078_keep_open_port_type = 0, const std::string &jt1078_send_app = "", const std::string &jt1078_send_stream = "");
 #endif
 
 Json::Value makeMediaSourceJson(mediakit::MediaSource &media);

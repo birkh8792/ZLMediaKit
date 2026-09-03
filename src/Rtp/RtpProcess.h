@@ -91,6 +91,31 @@ public:
     void setOnlyTrack(OnlyTrack only_track);
 
     /**
+     * 设置 JT1078 常开端口类型 (0=单次, 1=实况, 2=回放, 3=对讲, 4=子码流)
+     */
+    void setJt1078KeepOpenPortType(int type);
+
+    /**
+     * 设置对讲回传音频源 (openRtpServer 可选参数，自动绑定)
+     */
+    void setJt1078TalkSendStream(const std::string &app, const std::string &stream);
+
+    bool isJt1078Mode() const;
+    bool hasJt1078TalkSender() const;
+    const std::string &getJt1078Sim() const;
+    uint8_t getJt1078Channel() const;
+
+    /**
+     * 启动 1078 语音对讲，将 send_src 的音频经本连接回发给设备
+     */
+    bool startJt1078Talk(const std::shared_ptr<MediaSource> &send_src, const std::string &version = "2016");
+
+    /**
+     * 停止 1078 语音对讲
+     */
+    bool stopJt1078Talk();
+
+    /**
      * flush输出缓存
      * Flush output cache
      
@@ -134,12 +159,20 @@ private:
     void createTimer();
 
     void tryUpdateStreamFromJt1078(const char *data, size_t len);
+    void tryAutoStartJt1078Talk();
+    std::string makeJt1078StreamId(const std::string &sim, uint8_t channel) const;
     uint32_t makeJt1078FakeSsrc() const;
 
 private:
     bool _jt1078_mode = false;
     bool _publish_emitted = false;
+    bool _jt1078_talk_started = false;
+    int _jt1078_keep_open_port_type = 0;
     std::string _jt1078_sim;
+    std::string _jt1078_send_app;
+    std::string _jt1078_send_stream;
+    uint8_t _jt1078_channel = 1;
+    std::weak_ptr<MultiMediaSourceMuxer> _jt1078_talk_send_muxer;
     bool _pause_timeout = false;
     uint32_t _pause_seconds = 5 * 60;
     uint64_t _dts = 0;

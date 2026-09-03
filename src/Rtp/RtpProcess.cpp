@@ -11,9 +11,11 @@
 #if defined(ENABLE_RTPPROXY)
 #include "GB28181Process.h"
 #include "Jt1078Process.h"
+#include "Jt1078.h"
 #include "RtpProcess.h"
 #include "Util/File.h"
 #include "Common/config.h"
+#include "Common/MediaSource.h"
 
 using namespace std;
 using namespace toolkit;
@@ -153,6 +155,40 @@ bool RtpProcess::inputRtp(bool is_udp, const Socket::Ptr &sock, const char *data
     return ret;
 }
 
+void RtpProcess::setJt1078KeepOpenPortType(int type) {
+    _jt1078_keep_open_port_type = type;
+}
+
+void RtpProcess::setJt1078TalkSendStream(const string &app, const string &stream) {
+    _jt1078_send_app = app;
+    _jt1078_send_stream = stream;
+}
+
+bool RtpProcess::isJt1078Mode() const {
+    return _jt1078_mode;
+}
+
+bool RtpProcess::hasJt1078TalkSender() const {
+    return _jt1078_talk_started;
+}
+
+const string &RtpProcess::getJt1078Sim() const {
+    return _jt1078_sim;
+}
+
+uint8_t RtpProcess::getJt1078Channel() const {
+    return _jt1078_channel;
+}
+
+string RtpProcess::makeJt1078StreamId(const string &sim, uint8_t channel) const {
+    auto app = _media_info.app.empty() || _media_info.app == kRtpAppName ? kJt1078AppName : _media_info.app;
+    auto stream = jt1078MakeStreamId(sim, channel, _jt1078_keep_open_port_type);
+    if (MediaSource::find(_media_info.vhost, app, stream)) {
+        stream += "_" + to_string((uint64_t)this);
+    }
+    return stream;
+}
+
 void RtpProcess::tryUpdateStreamFromJt1078(const char *data, size_t len) {
     if (!_media_info.stream.empty() || len < sizeof(Jt1078VideoHeader2013) || !isJt1078(data, len)) {
         return;
@@ -161,14 +197,16 @@ void RtpProcess::tryUpdateStreamFromJt1078(const char *data, size_t len) {
     if (version == Jt1078Version::V2013) {
         auto *head = (Jt1078VideoHeader2013 *)data;
         _jt1078_sim = jt1078SimToString(head->sim, 6);
-        _media_info.stream = _jt1078_sim + "_" + to_string((int)head->ch);
+        _jt1078_channel = head->ch;
+        _media_info.stream = makeJt1078StreamId(_jt1078_sim, _jt1078_channel);
         if (_media_info.app.empty() || _media_info.app == kRtpAppName) {
             _media_info.app = kJt1078AppName;
         }
     } else if (version == Jt1078Version::V2019 && len >= sizeof(Jt1078VideoHeader2019)) {
         auto *head = (Jt1078VideoHeader2019 *)data;
         _jt1078_sim = jt1078SimToString(head->sim, 10);
-        _media_info.stream = _jt1078_sim + "_" + to_string((int)head->ch);
+        _jt1078_channel = head->ch;
+        _media_info.stream = makeJt1078StreamId(_jt1078_sim, _jt1078_channel);
         if (_media_info.app.empty() || _media_info.app == kRtpAppName) {
             _media_info.app = kJt1078AppName;
         }
@@ -219,8 +257,9 @@ bool RtpProcess::inputJt1078(bool is_udp, const Socket::Ptr &sock, const char *d
                 return;
             }
             strong_self->_jt1078_sim = sim;
+            strong_self->_jt1078_channel = channel;
             if (strong_self->_media_info.stream.empty()) {
-                strong_self->_media_info.stream = sim + "_" + to_string((int)channel);
+                strong_self->_media_info.stream = strong_self->makeJt1078StreamId(sim, channel);
             }
         });
         _process = std::move(process);
@@ -236,7 +275,57 @@ bool RtpProcess::inputJt1078(bool is_udp, const Socket::Ptr &sock, const char *d
     if (dts_out) {
         *dts_out = _dts;
     }
+    tryAutoStartJt1078Talk();
     return ret;
+}
+
+void RtpProcess::tryAutoStartJt1078Talk() {
+    if (_jt1078_talk_started || _jt1078_keep_open_port_type != kJt1078PortTalk) {
+        return;
+    }
+    if (_jt1078_send_app.empty() || _jt1078_send_stream.empty() || !_sock || _jt1078_sim.empty()) {
+        return;
+    }
+    auto send_src = MediaSource::find(_media_info.vhost, _jt1078_send_app, _jt1078_send_stream);
+    if (!send_src) {
+        return;
+    }
+    GET_CONFIG(string, version, RtpProxy::kJt1078Version);
+    startJt1078Talk(send_src, version);
+}
+
+bool RtpProcess::startJt1078Talk(const MediaSource::Ptr &send_src, const string &version) {
+    if (!_jt1078_mode || !_sock || _jt1078_sim.empty()) {
+        return false;
+    }
+    if (_jt1078_talk_started) {
+        return false;
+    }
+    auto send_muxer = send_src->getMuxer();
+    if (!send_muxer) {
+        return false;
+    }
+    send_muxer->startSendJt1078Talk(_sock, _jt1078_sim, _jt1078_channel, version);
+    _jt1078_talk_send_muxer = send_muxer;
+    _jt1078_talk_started = true;
+    pauseRtpTimeout(true, 86400 * 7);
+    InfoP(this) << "JT1078 voice talk started, recv: " << _media_info.shortUrl()
+                << ", send: " << send_src->getMediaTuple().shortUrl();
+    return true;
+}
+
+bool RtpProcess::stopJt1078Talk() {
+    if (!_jt1078_talk_started) {
+        return false;
+    }
+    if (auto muxer = _jt1078_talk_send_muxer.lock()) {
+        muxer->stopSendJt1078Talk();
+    }
+    _jt1078_talk_send_muxer.reset();
+    _jt1078_talk_started = false;
+    pauseRtpTimeout(false);
+    InfoP(this) << "JT1078 voice talk stopped: " << _media_info.shortUrl();
+    return true;
 }
 
 bool RtpProcess::inputFrame(const Frame::Ptr &frame) {
@@ -320,6 +409,7 @@ void RtpProcess::setOnlyTrack(OnlyTrack only_track) {
 }
 
 void RtpProcess::onDetach(const SockException &ex) {
+    stopJt1078Talk();
     if (_on_detach) {
         WarnL << ex << ", stream_id: " << getIdentifier();
         _on_detach(ex);

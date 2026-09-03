@@ -41,6 +41,15 @@ enum Jt1078PacketType {
     kJt1078PacketMiddle = 3,
 };
 
+// jtt1078_KeepOpenPortType: 0=单次, 1=实况, 2=回放, 3=对讲, 4=子码流
+enum Jt1078KeepOpenPortType {
+    kJt1078PortOnce = 0,
+    kJt1078PortLive = 1,
+    kJt1078PortPlayback = 2,
+    kJt1078PortTalk = 3,
+    kJt1078PortSub = 4,
+};
+
 #pragma pack(push, 1)
 
 struct Jt1078VideoHeader2013 {
@@ -151,6 +160,8 @@ struct Jt1078OtherHeader2019 {
 
 bool isJt1078(const char *data, size_t len);
 Jt1078Version detectJt1078Version(const char *data, size_t len);
+const char *jt1078StreamSuffix(int keep_open_port_type);
+std::string jt1078MakeStreamId(const std::string &sim, uint8_t channel, int keep_open_port_type);
 std::string jt1078SimToString(const uint8_t *sim, size_t sim_len);
 CodecId jt1078PtToCodec(uint8_t pt, TrackType &type);
 uint64_t jt1078ReadBe64(const void *data);

@@ -28,6 +28,9 @@ public:
     static const std::string kSSRC;
     static const std::string kOnlyTrack;
     static const std::string kUdpRecvBuffer;
+    static const std::string kJt1078KeepOpenPortType;
+    static const std::string kJt1078SendApp;
+    static const std::string kJt1078SendStream;
 
     RtpSession(const toolkit::Socket::Ptr &sock);
     ~RtpSession() override;
@@ -59,6 +62,9 @@ private:
     bool _emit_detach = false;
     bool _jt1078_mode = false;
     int _only_track = 0;
+    int _jt1078_keep_open_port_type = 0;
+    std::string _jt1078_send_app;
+    std::string _jt1078_send_stream;
     uint32_t _ssrc = 0;
     toolkit::Ticker _ticker;
     MediaTuple _tuple;

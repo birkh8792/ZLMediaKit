@@ -212,7 +212,11 @@ void Jt1078EncoderImp::sendAudioFrame(const Frame::Ptr &frame) {
         memcpy(buf->data() + sizeof(Jt1078AudioHeader2013), data, len);
     }
     onPacket(std::move(buf));
-    _audio_ts += 20;
+    if (frame->getCodecId() == CodecG711A || frame->getCodecId() == CodecG711U) {
+        _audio_ts += (len / 80) * 10;
+    } else {
+        _audio_ts += 20;
+    }
 }
 
 bool Jt1078EncoderImp::inputFrame(const Frame::Ptr &frame) {

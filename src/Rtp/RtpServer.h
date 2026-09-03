@@ -57,7 +57,8 @@ public:
      * [AUTO-TRANSLATED:cb9e0717]
      */
     void start(uint16_t local_port, const char *local_ip = "::", const MediaTuple &tuple = MediaTuple{DEFAULT_VHOST, kRtpAppName, "", ""}, TcpMode tcp_mode = PASSIVE,
-               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false);
+               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false,
+               int jt1078_keep_open_port_type = 0, const std::string &jt1078_send_app = "", const std::string &jt1078_send_stream = "");
 
     /**
      * 连接到tcp服务(tcp主动模式)
@@ -114,6 +115,9 @@ protected:
     std::function<void()> _on_cleanup;
 
     int _only_track = 0;
+    int _jt1078_keep_open_port_type = 0;
+    std::string _jt1078_send_app;
+    std::string _jt1078_send_stream;
     // 用于tcp主动模式  [AUTO-TRANSLATED:faedf05c]
     // Used for tcp active mode
     TcpMode _tcp_mode = NONE;

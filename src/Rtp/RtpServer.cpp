@@ -36,10 +36,16 @@ public:
         _tuple = std::move(tuple);
     }
 
-    void setRtpServerInfo(uint16_t local_port, RtpServer::TcpMode mode, bool re_use_port, uint32_t ssrc, int only_track) {
+    void setRtpServerInfo(uint16_t local_port, RtpServer::TcpMode mode, bool re_use_port, uint32_t ssrc, int only_track,
+                          int jt1078_keep_open_port_type = 0, const std::string &jt1078_send_app = "",
+                          const std::string &jt1078_send_stream = "") {
         _ssrc = ssrc;
         _process = RtpProcess::createProcess(_tuple);
         _process->setOnlyTrack((RtpProcess::OnlyTrack)only_track);
+        _process->setJt1078KeepOpenPortType(jt1078_keep_open_port_type);
+        if (!jt1078_send_app.empty() && !jt1078_send_stream.empty()) {
+            _process->setJt1078TalkSendStream(jt1078_send_app, jt1078_send_stream);
+        }
 
         _timeout_cb = [=]() mutable {
             NOTICE_EMIT(BroadcastRtpServerTimeoutArgs, Broadcast::kBroadcastRtpServerTimeout, local_port, _tuple, (int)mode, re_use_port, ssrc);
@@ -135,7 +141,12 @@ private:
     std::shared_ptr<struct sockaddr_storage> _rtcp_addr;
 };
 
-void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
+void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex,
+                      int jt1078_keep_open_port_type, const string &jt1078_send_app, const string &jt1078_send_stream) {
+    _only_track = only_track;
+    _jt1078_keep_open_port_type = jt1078_keep_open_port_type;
+    _jt1078_send_app = jt1078_send_app;
+    _jt1078_send_stream = jt1078_send_stream;
     // 创建udp服务器  [AUTO-TRANSLATED:99619428]
     // Create UDP server
     auto poller = EventPollerPool::Instance().getPoller();
@@ -173,7 +184,7 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         // If a stream ID is specified, then one port is one stream (regardless of whether it contains multiple streams with multiple SSRCs, after binding the RTP source, streams that do not match the IP port will be filtered out)
         helper = std::make_shared<RtcpHelper>(std::move(rtcp_socket), tuple);
         helper->startRtcp();
-        helper->setRtpServerInfo(local_port, tcp_mode, re_use_port, ssrc, only_track);
+        helper->setRtpServerInfo(local_port, tcp_mode, re_use_port, ssrc, only_track, jt1078_keep_open_port_type, jt1078_send_app, jt1078_send_stream);
         bool bind_peer_addr = false;
         auto ssrc_ptr = std::make_shared<uint32_t>(ssrc);
         _ssrc = ssrc_ptr;
@@ -209,6 +220,9 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         (*udp_server)[RtpSession::kUdpRecvBuffer] = udpRecvSocketBuffer;
         (*udp_server)[RtpSession::kVhost] = tuple.vhost;
         (*udp_server)[RtpSession::kApp] = tuple.app;
+        (*udp_server)[RtpSession::kJt1078KeepOpenPortType] = jt1078_keep_open_port_type;
+        (*udp_server)[RtpSession::kJt1078SendApp] = jt1078_send_app;
+        (*udp_server)[RtpSession::kJt1078SendStream] = jt1078_send_stream;
         udp_server->start<RtpSession>(local_port, local_ip);
         rtp_socket = nullptr;
     }
@@ -224,6 +238,9 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         (*tcp_server)[RtpSession::kStreamID] = tuple.stream;
         (*tcp_server)[RtpSession::kSSRC] = ssrc;
         (*tcp_server)[RtpSession::kOnlyTrack] = only_track;
+        (*tcp_server)[RtpSession::kJt1078KeepOpenPortType] = jt1078_keep_open_port_type;
+        (*tcp_server)[RtpSession::kJt1078SendApp] = jt1078_send_app;
+        (*tcp_server)[RtpSession::kJt1078SendStream] = jt1078_send_stream;
         if (tcp_mode == PASSIVE) {
             weak_ptr<RtpServer> weak_self = shared_from_this();
             tcp_server->start<RtpSession>(local_port, local_ip, 1024, [weak_self, processor](std::shared_ptr<RtpSession> &session) {

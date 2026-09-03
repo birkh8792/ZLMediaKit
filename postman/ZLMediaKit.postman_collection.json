@@ -1821,9 +1821,96 @@
 							"value": "::",
 							"description": "指定创建RTP的本地ip，ipv4可填”0.0.0.0“，ipv6可填”::“，一般保持默认",
 							"disabled": true
+						},
+						{
+							"key": "jtt1078_KeepOpenPortType",
+							"value": "0",
+							"description": "1078常开端口类型：0单次(默认)，1实况，2回放，3对讲，4子码流。>=1时自动启用multiplex且app默认1078",
+							"disabled": true
+						},
+						{
+							"key": "send_app",
+							"value": "talk",
+							"description": "1078对讲回传音频源app，与send_stream_id配合可自动绑定对讲",
+							"disabled": true
+						},
+						{
+							"key": "send_stream_id",
+							"value": "audio_1",
+							"description": "1078对讲回传音频源stream，与send_app配合可自动绑定对讲",
+							"disabled": true
 						}
 					]
 				}
+			},
+			"response": []
+		},
+		{
+			"name": "创建1078对讲常开端口(openRtpServer jt1078 talk)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ZLMediaKit_URL}}/index/api/openRtpServer?secret={{ZLMediaKit_secret}}&port=0&tcp_mode=1&app=1078&jtt1078_KeepOpenPortType=3&send_app=talk&send_stream_id=audio_1",
+					"host": [
+						"{{ZLMediaKit_URL}}"
+					],
+					"path": [
+						"index",
+						"api",
+						"openRtpServer"
+					],
+					"query": [
+						{
+							"key": "secret",
+							"value": "{{ZLMediaKit_secret}}",
+							"description": "api操作密钥(配置文件配置)"
+						},
+						{
+							"key": "port",
+							"value": "0",
+							"description": "绑定的端口，0时为随机端口"
+						},
+						{
+							"key": "tcp_mode",
+							"value": "1",
+							"description": "tcp模式，1为启用tcp监听(1078设备常用TCP)"
+						},
+						{
+							"key": "vhost",
+							"value": "{{defaultVhost}}",
+							"description": "虚拟主机",
+							"disabled": true
+						},
+						{
+							"key": "app",
+							"value": "1078",
+							"description": "应用名，1078常开端口建议使用1078"
+						},
+						{
+							"key": "jtt1078_KeepOpenPortType",
+							"value": "3",
+							"description": "3=语音对讲常开端口，设备接入后流名为 {SIM}_{ch}_talk"
+						},
+						{
+							"key": "send_app",
+							"value": "talk",
+							"description": "可选：回传对讲音频源app，与send_stream_id同时指定时可自动绑定对讲"
+						},
+						{
+							"key": "send_stream_id",
+							"value": "audio_1",
+							"description": "可选：回传对讲音频源stream(G711A推流)"
+						},
+						{
+							"key": "only_track",
+							"value": "1",
+							"description": "对讲端口通常只收音频，建议设为1(单音频)",
+							"disabled": true
+						}
+					]
+				},
+				"description": "打开1078语音对讲常开端口。平台拿到返回port后通知车载设备TCP连接该端口推送1078音频。设备接入后媒体流名为 1078/{SIM}_{channel}_talk。"
 			},
 			"response": []
 		},
@@ -2435,6 +2522,106 @@
 						}
 					]
 				}
+			},
+			"response": []
+		},
+		{
+			"name": "开始1078语音对讲(sendJtt1078Talk)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ZLMediaKit_URL}}/index/api/sendJtt1078Talk?secret={{ZLMediaKit_secret}}&vhost={{defaultVhost}}&app=1078&stream=138001380000_1_talk&send_app=talk&send_stream_id=audio_1",
+					"host": [
+						"{{ZLMediaKit_URL}}"
+					],
+					"path": [
+						"index",
+						"api",
+						"sendJtt1078Talk"
+					],
+					"query": [
+						{
+							"key": "secret",
+							"value": "{{ZLMediaKit_secret}}",
+							"description": "api操作密钥(配置文件配置)"
+						},
+						{
+							"key": "vhost",
+							"value": "{{defaultVhost}}",
+							"description": "虚拟主机"
+						},
+						{
+							"key": "app",
+							"value": "1078",
+							"description": "设备接入流的应用名，通常为1078"
+						},
+						{
+							"key": "stream",
+							"value": "138001380000_1_talk",
+							"description": "设备1078对讲接入流名，格式 {SIM}_{channel}_talk"
+						},
+						{
+							"key": "send_app",
+							"value": "talk",
+							"description": "待发送给设备的音频源app"
+						},
+						{
+							"key": "send_stream_id",
+							"value": "audio_1",
+							"description": "待发送给设备的音频源stream，需为G711A/G711U/AAC"
+						},
+						{
+							"key": "jt1078_version",
+							"value": "2016",
+							"description": "1078协议版本：2013/2016/2019，默认读取配置文件",
+							"disabled": true
+						}
+					]
+				},
+				"description": "将 send_app/send_stream_id 的音频编码为JT1078格式，经设备原TCP/UDP连接回发。调用前需确保设备已接入且发送音频流已就绪。"
+			},
+			"response": []
+		},
+		{
+			"name": "停止1078语音对讲(stopJtt1078Talk)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ZLMediaKit_URL}}/index/api/stopJtt1078Talk?secret={{ZLMediaKit_secret}}&vhost={{defaultVhost}}&app=1078&stream=138001380000_1_talk",
+					"host": [
+						"{{ZLMediaKit_URL}}"
+					],
+					"path": [
+						"index",
+						"api",
+						"stopJtt1078Talk"
+					],
+					"query": [
+						{
+							"key": "secret",
+							"value": "{{ZLMediaKit_secret}}",
+							"description": "api操作密钥(配置文件配置)"
+						},
+						{
+							"key": "vhost",
+							"value": "{{defaultVhost}}",
+							"description": "虚拟主机"
+						},
+						{
+							"key": "app",
+							"value": "1078",
+							"description": "设备接入流的应用名"
+						},
+						{
+							"key": "stream",
+							"value": "138001380000_1_talk",
+							"description": "设备1078对讲接入流名"
+						}
+					]
+				},
+				"description": "停止向指定1078设备回发对讲音频，不断开设备推流连接。"
 			},
 			"response": []
 		},

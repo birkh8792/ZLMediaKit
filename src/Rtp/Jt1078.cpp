@@ -56,6 +56,19 @@ Jt1078Version detectJt1078Version(const char *data, size_t len) {
     return Jt1078Version::Unknown;
 }
 
+const char *jt1078StreamSuffix(int keep_open_port_type) {
+    switch (keep_open_port_type) {
+        case kJt1078PortPlayback: return "_playback";
+        case kJt1078PortTalk: return "_talk";
+        case kJt1078PortSub: return "_sub";
+        default: return "";
+    }
+}
+
+std::string jt1078MakeStreamId(const std::string &sim, uint8_t channel, int keep_open_port_type) {
+    return sim + "_" + std::to_string((int)channel) + jt1078StreamSuffix(keep_open_port_type);
+}
+
 std::string jt1078SimToString(const uint8_t *sim, size_t sim_len) {
     static const char hex[] = "0123456789ABCDEF";
     std::string ret;

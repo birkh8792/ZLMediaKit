@@ -680,6 +680,44 @@ MultiMediaSourceMuxer::RingType::RingReader::Ptr MultiMediaSourceMuxer::startSen
     });
     return reader;
 }
+
+MultiMediaSourceMuxer::RingType::RingReader::Ptr MultiMediaSourceMuxer::startSendJt1078Talk(const toolkit::Socket::Ptr &sock,
+                                                                                              const std::string &sim, uint8_t channel,
+                                                                                              const std::string &version) {
+    if (_jt1078_talk_reader) {
+        return _jt1078_talk_reader;
+    }
+    createGopCacheIfNeed();
+    auto ring = _ring;
+    auto poller = getOwnerPoller(MediaSource::NullMediaSource());
+    Jt1078Version ver = version == "2019" ? Jt1078Version::V2019 : Jt1078Version::V2013;
+    auto sender = std::make_shared<Jt1078SocketSender>(sock, ver, sim, channel);
+    for (auto &track : getTracks(false)) {
+        if (track->getTrackType() == TrackAudio) {
+            sender->addTrack(track);
+        }
+    }
+    sender->addTrackCompleted();
+    auto reader = ring->attach(poller);
+    reader->setReadCB([sender](const Frame::Ptr &frame) {
+        if (frame->getTrackType() == TrackAudio) {
+            sender->inputFrame(frame);
+        }
+    });
+    reader->setDetachCB([]() {});
+    _jt1078_talk_reader = reader;
+    InfoL << "JT1078 voice talk started on stream: " << shortUrl() << ", sim: " << sim << ", channel: " << (int)channel;
+    return reader;
+}
+
+bool MultiMediaSourceMuxer::stopSendJt1078Talk() {
+    if (!_jt1078_talk_reader) {
+        return false;
+    }
+    _jt1078_talk_reader.reset();
+    InfoL << "JT1078 voice talk stopped on stream: " << shortUrl();
+    return true;
+}
 #endif
 
 bool MultiMediaSourceMuxer::stopSendRtp(const string &ssrc) {
@@ -739,6 +777,7 @@ bool MultiMediaSourceMuxer::close(MediaSource &sender) {
     _hls_fmp4 = nullptr;
 #if defined(ENABLE_RTPPROXY)
     _rtp_sender.clear();
+    _jt1078_talk_reader.reset();
 #endif // ENABLE_RTPPROXY
     return true;
 }

@@ -30,6 +30,9 @@ const string RtpSession::kStreamID = "stream_id";
 const string RtpSession::kSSRC = "ssrc";
 const string RtpSession::kOnlyTrack = "only_track";
 const string RtpSession::kUdpRecvBuffer = "udp_recv_socket_buffer";
+const string RtpSession::kJt1078KeepOpenPortType = "jt1078_keep_open_port_type";
+const string RtpSession::kJt1078SendApp = "jt1078_send_app";
+const string RtpSession::kJt1078SendStream = "jt1078_send_stream";
 
 void RtpSession::attachServer(const Server &server) {
     setParams(const_cast<Server &>(server));
@@ -41,6 +44,9 @@ void RtpSession::setParams(mINI &ini) {
     _tuple.stream = ini[kStreamID];
     _ssrc = ini[kSSRC];
     _only_track = ini[kOnlyTrack];
+    _jt1078_keep_open_port_type = ini[kJt1078KeepOpenPortType];
+    _jt1078_send_app = ini[kJt1078SendApp];
+    _jt1078_send_stream = ini[kJt1078SendStream];
     int udp_socket_buffer = ini[kUdpRecvBuffer];
     if (_is_udp) {
         // 设置udp socket读缓存  [AUTO-TRANSLATED:80cfb6e3]
@@ -98,6 +104,10 @@ void RtpSession::onJt1078Data(const char *data, size_t len) {
     if (!_process) {
         _process = RtpProcess::createProcess(_tuple);
         _process->setOnlyTrack((RtpProcess::OnlyTrack)_only_track);
+        _process->setJt1078KeepOpenPortType(_jt1078_keep_open_port_type);
+        if (!_jt1078_send_app.empty() && !_jt1078_send_stream.empty()) {
+            _process->setJt1078TalkSendStream(_jt1078_send_app, _jt1078_send_stream);
+        }
         weak_ptr<RtpSession> weak_self = static_pointer_cast<RtpSession>(shared_from_this());
         _process->setOnDetach([weak_self](const SockException &ex) {
             if (auto strong_self = weak_self.lock()) {

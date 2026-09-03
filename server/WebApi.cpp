@@ -51,6 +51,7 @@
 
 #if defined(ENABLE_RTPPROXY)
 #include "Rtp/RtpServer.h"
+#include "Rtp/Jt1078.h"
 #endif
 
 #ifdef ENABLE_WEBRTC
@@ -517,8 +518,12 @@ Value makeMediaSourceJson(MediaSource &media) {
 }
 
 #if defined(ENABLE_RTPPROXY)
-uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
+uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex,
+                       int jt1078_keep_open_port_type, const string &jt1078_send_app, const string &jt1078_send_stream) {
     auto key = tuple.shortUrl();
+    if (jt1078_keep_open_port_type >= kJt1078PortLive) {
+        key = tuple.vhost + "/" + tuple.app + "/_keep_open_" + to_string(jt1078_keep_open_port_type);
+    }
     if (s_rtp_server.find(key)) {
         // 为了防止RtpProcess所有权限混乱的问题，不允许重复添加相同的key  [AUTO-TRANSLATED:06c7b14c]
         // To prevent the problem of all permissions being messed up in RtpProcess, duplicate keys are not allowed to be added
@@ -526,13 +531,16 @@ uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, i
     }
 
     auto server = s_rtp_server.makeWithAction(key, [&](RtpServer::Ptr server) {
-        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex);
+        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex,
+                     jt1078_keep_open_port_type, jt1078_send_app, jt1078_send_stream);
     });
-    server->setOnDetach([key](const SockException &ex) {
-        // 设置rtp超时移除事件  [AUTO-TRANSLATED:98d42cf3]
-        // Set RTP timeout removal event
-        s_rtp_server.erase(key);
-    });
+    if (jt1078_keep_open_port_type < kJt1078PortLive) {
+        server->setOnDetach([key](const SockException &ex) {
+            // 设置rtp超时移除事件  [AUTO-TRANSLATED:98d42cf3]
+            // Set RTP timeout removal event
+            s_rtp_server.erase(key);
+        });
+    }
 
     // 回复json  [AUTO-TRANSLATED:0c443c6a]
     // Reply JSON
@@ -1465,7 +1473,7 @@ void installWebApi() {
 
     api_regist("/index/api/openRtpServer",[](API_ARGS_MAP){
         CHECK_SECRET();
-        CHECK_ARGS("port", "stream_id");
+        CHECK_ARGS("port");
         std::string vhost = DEFAULT_VHOST;
         if (!allArgs["vhost"].empty()) {
             vhost = allArgs["vhost"];
@@ -1474,7 +1482,18 @@ void installWebApi() {
         if (!allArgs["app"].empty()) {
             app = allArgs["app"];
         }
+        int jt1078_keep_open_port_type = allArgs["jtt1078_KeepOpenPortType"].as<int>();
         auto stream_id = allArgs["stream_id"];
+        if (stream_id.empty() && jt1078_keep_open_port_type < kJt1078PortLive) {
+            throw InvalidArgsException("stream_id is required when jtt1078_KeepOpenPortType < 1");
+        }
+        bool multiplex = allArgs["multiplex"].as<bool>();
+        if (jt1078_keep_open_port_type >= kJt1078PortLive) {
+            multiplex = true;
+            if (app == kRtpAppName) {
+                app = kJt1078AppName;
+            }
+        }
         auto tuple = MediaTuple { vhost, app, stream_id, "" };
         auto tcp_mode = allArgs["tcp_mode"].as<int>();
         if (allArgs["enable_tcp"].as<int>() && !tcp_mode) {
@@ -1492,8 +1511,11 @@ void installWebApi() {
         if (!allArgs["local_ip"].empty()) {
             local_ip = allArgs["local_ip"];
         }
+        std::string jt1078_send_app = allArgs["send_app"];
+        std::string jt1078_send_stream = allArgs["send_stream_id"];
         auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, allArgs["re_use_port"].as<bool>(),
-                                  allArgs["ssrc"].as<uint32_t>(), only_track);
+                                  allArgs["ssrc"].as<uint32_t>(), only_track, multiplex,
+                                  jt1078_keep_open_port_type, jt1078_send_app, jt1078_send_stream);
         if (port == 0) {
             throw InvalidArgsException("This stream already exists");
         }
@@ -1532,7 +1554,9 @@ void installWebApi() {
             local_ip = allArgs["local_ip"];
         }
 
-        auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, true, 0, only_track, true);
+        auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, true, 0, only_track, true,
+                                  allArgs["jtt1078_KeepOpenPortType"].as<int>(),
+                                  allArgs["send_app"], allArgs["send_stream_id"]);
         if (port == 0) {
             throw InvalidArgsException("This stream already exists");
         }
@@ -1734,6 +1758,72 @@ void installWebApi() {
                 val["msg"] = ex.what();
                 invoker(200, headerOut, val.toStyledString());
             }
+        });
+    });
+
+    api_regist("/index/api/sendJtt1078Talk", [](API_ARGS_MAP_ASYNC) {
+        CHECK_SECRET();
+        CHECK_ARGS("app", "stream", "send_app", "send_stream_id");
+        std::string vhost = DEFAULT_VHOST;
+        if (!allArgs["vhost"].empty()) {
+            vhost = allArgs["vhost"];
+        }
+        auto recv_src = MediaSource::find(vhost, allArgs["app"], allArgs["stream"]);
+        if (!recv_src) {
+            throw ApiRetException("1078 device intercom voice stream has not been connected yet", API::NotFound);
+        }
+        auto send_src = MediaSource::find(vhost, allArgs["send_app"], allArgs["send_stream_id"]);
+        if (!send_src) {
+            throw ApiRetException("The voice to be sent is not ready", API::NotFound);
+        }
+        auto rtp_process = recv_src->getRtpProcess();
+        if (!rtp_process || !rtp_process->isJt1078Mode()) {
+            throw ApiRetException("The connected device is not a JT1078 device", API::InvalidArgs);
+        }
+        if (rtp_process->hasJt1078TalkSender()) {
+            throw ApiRetException("Voice intercom has already been sent", API::InvalidArgs);
+        }
+        std::string version = allArgs["jt1078_version"];
+        if (version.empty()) {
+            GET_CONFIG(std::string, cfg_version, RtpProxy::kJt1078Version);
+            version = cfg_version;
+        }
+        recv_src->getOwnerPoller()->async([=]() mutable {
+            if (!rtp_process->startJt1078Talk(send_src, version)) {
+                val["code"] = API::OtherFailed;
+                val["msg"] = "Failed to start JT1078 voice talk";
+            } else {
+                val["code"] = API::Success;
+                val["msg"] = "Successfully sent voice intercom audio";
+            }
+            invoker(200, headerOut, val.toStyledString());
+        });
+    });
+
+    api_regist("/index/api/stopJtt1078Talk", [](API_ARGS_MAP_ASYNC) {
+        CHECK_SECRET();
+        CHECK_ARGS("app", "stream");
+        std::string vhost = DEFAULT_VHOST;
+        if (!allArgs["vhost"].empty()) {
+            vhost = allArgs["vhost"];
+        }
+        auto recv_src = MediaSource::find(vhost, allArgs["app"], allArgs["stream"]);
+        if (!recv_src) {
+            throw ApiRetException("can not find the recv stream", API::NotFound);
+        }
+        auto rtp_process = recv_src->getRtpProcess();
+        if (!rtp_process) {
+            throw ApiRetException("can not find rtp process", API::NotFound);
+        }
+        recv_src->getOwnerPoller()->async([=]() mutable {
+            if (rtp_process->stopJt1078Talk()) {
+                val["code"] = API::Success;
+                val["msg"] = "success";
+            } else {
+                val["code"] = API::OtherFailed;
+                val["msg"] = "voice talk not started";
+            }
+            invoker(200, headerOut, val.toStyledString());
         });
     });
 

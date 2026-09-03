@@ -169,6 +169,17 @@ public:
                                                       const std::string &version = "2016");
 
     /**
+     * 1078 语音对讲: 将本流音频编码为 JT1078 格式，经设备推流连接回发
+     */
+    RingType::RingReader::Ptr startSendJt1078Talk(const toolkit::Socket::Ptr &sock, const std::string &sim, uint8_t channel,
+                                                  const std::string &version = "2016");
+
+    /**
+     * 停止 1078 语音对讲回发
+     */
+    bool stopSendJt1078Talk();
+
+    /**
      * 停止ps-rtp发送
      * @return 是否成功
      * Stop ps-rtp sending
@@ -264,6 +275,7 @@ private:
     std::weak_ptr<Listener> _track_listener;
 #if defined(ENABLE_RTPPROXY)
     std::unordered_multimap<std::string, std::tuple<RingType::RingReader::Ptr, std::weak_ptr<RtpSender>>> _rtp_sender;
+    RingType::RingReader::Ptr _jt1078_talk_reader;
 #endif // ENABLE_RTPPROXY
     FMP4MediaSourceMuxer::Ptr _fmp4;
     RtmpMediaSourceMuxer::Ptr _rtmp;
