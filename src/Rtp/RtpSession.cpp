@@ -15,6 +15,9 @@
 #include "Rtsp/Rtsp.h"
 #include "Rtsp/RtpReceiver.h"
 #include "Common/config.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078.h"
+#endif
 
 using namespace std;
 using namespace toolkit;
@@ -27,6 +30,9 @@ const string RtpSession::kStreamID = "stream_id";
 const string RtpSession::kSSRC = "ssrc";
 const string RtpSession::kOnlyTrack = "only_track";
 const string RtpSession::kUdpRecvBuffer = "udp_recv_socket_buffer";
+#if defined(ENABLE_JT1078)
+const string RtpSession::kJt1078StreamSuffix = "jt1078_stream_suffix";
+#endif
 
 void RtpSession::attachServer(const Server &server) {
     setParams(const_cast<Server &>(server));
@@ -38,6 +44,9 @@ void RtpSession::setParams(mINI &ini) {
     _tuple.stream = ini[kStreamID];
     _ssrc = ini[kSSRC];
     _only_track = ini[kOnlyTrack];
+#if defined(ENABLE_JT1078)
+    _jt1078_stream_suffix = (string)ini[kJt1078StreamSuffix];
+#endif
     int udp_socket_buffer = ini[kUdpRecvBuffer];
     if (_is_udp) {
         // 设置udp socket读缓存  [AUTO-TRANSLATED:80cfb6e3]
@@ -61,6 +70,17 @@ void RtpSession::onRecv(const Buffer::Ptr &data) {
         onRtpPacket(data->data(), data->size());
         return;
     }
+#if defined(ENABLE_JT1078)
+    if (_jt1078_mode) {
+        onJt1078Data(data->data(), data->size());
+        return;
+    }
+    if (isJt1078(data->data(), data->size())) {
+        _jt1078_mode = true;
+        onJt1078Data(data->data(), data->size());
+        return;
+    }
+#endif
     RtpSplitter::input(data->data(), data->size());
 }
 
@@ -80,9 +100,46 @@ void RtpSession::onManager() {
 void RtpSession::setRtpProcess(RtpProcess::Ptr process) {
     _emit_detach = (bool)process;
     _process = std::move(process);
+#if defined(ENABLE_JT1078)
+    if (_process && !_jt1078_stream_suffix.empty()) {
+        _process->setJt1078StreamSuffix(_jt1078_stream_suffix);
+    }
+#endif
 }
 
+#if defined(ENABLE_JT1078)
+void RtpSession::onJt1078Data(const char *data, size_t len) {
+    if (!_process) {
+        _process = RtpProcess::createProcess(_tuple);
+        _process->setOnlyTrack((RtpProcess::OnlyTrack)_only_track);
+        if (!_jt1078_stream_suffix.empty()) {
+            _process->setJt1078StreamSuffix(_jt1078_stream_suffix);
+        }
+        weak_ptr<RtpSession> weak_self = static_pointer_cast<RtpSession>(shared_from_this());
+        _process->setOnDetach([weak_self](const SockException &ex) {
+            if (auto strong_self = weak_self.lock()) {
+                strong_self->safeShutdown(ex);
+            }
+        });
+    }
+    try {
+        _process->inputJt1078(_is_udp, getSock(), data, len, (struct sockaddr *)&_addr);
+    } catch (std::exception &ex) {
+        shutdown(SockException(Err_shutdown, ex.what()));
+        return;
+    }
+    _ticker.resetTime();
+}
+#endif
+
 void RtpSession::onRtpPacket(const char *data, size_t len) {
+#if defined(ENABLE_JT1078)
+    if (!_jt1078_mode && isJt1078(data, len)) {
+        _jt1078_mode = true;
+        onJt1078Data(data, len);
+        return;
+    }
+#endif
     if (!isRtp(data, len)) {
         // 忽略非rtp数据  [AUTO-TRANSLATED:771b77d8]
         // Ignore non-rtp data

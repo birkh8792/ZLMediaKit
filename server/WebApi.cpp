@@ -51,6 +51,9 @@
 
 #if defined(ENABLE_RTPPROXY)
 #include "Rtp/RtpServer.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078.h"
+#endif
 #endif
 
 #ifdef ENABLE_WEBRTC
@@ -538,8 +541,15 @@ Value makeMediaSourceJson(MediaSource &media) {
 }
 
 #if defined(ENABLE_RTPPROXY)
-uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
+uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex,
+                       const string &jt1078_stream_suffix) {
     auto key = tuple.shortUrl();
+#if defined(ENABLE_JT1078)
+    // 常开多路复用时用固定 key，避免空 stream_id 冲突
+    if (multiplex && tuple.stream.empty()) {
+        key = tuple.vhost + "/" + tuple.app + "/_jt1078_keep_" + (jt1078_stream_suffix.empty() ? "live" : jt1078_stream_suffix);
+    }
+#endif
     if (s_rtp_server.find(key)) {
         // 为了防止RtpProcess所有权限混乱的问题，不允许重复添加相同的key  [AUTO-TRANSLATED:06c7b14c]
         // To prevent the problem of all permissions being messed up in RtpProcess, duplicate keys are not allowed to be added
@@ -547,7 +557,7 @@ uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, i
     }
 
     auto server = s_rtp_server.makeWithAction(key, [&](RtpServer::Ptr server) {
-        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex);
+        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex, jt1078_stream_suffix);
     });
     server->setOnDetach([key](const SockException &ex) {
         // 设置rtp超时移除事件  [AUTO-TRANSLATED:98d42cf3]
@@ -1490,7 +1500,7 @@ void installWebApi() {
 
     api_regist("/index/api/openRtpServer",[](API_ARGS_MAP){
         CHECK_SECRET();
-        CHECK_ARGS("port", "stream_id");
+        CHECK_ARGS("port");
         std::string vhost = DEFAULT_VHOST;
         if (!allArgs["vhost"].empty()) {
             vhost = allArgs["vhost"];
@@ -1500,7 +1510,6 @@ void installWebApi() {
             app = allArgs["app"];
         }
         auto stream_id = allArgs["stream_id"];
-        auto tuple = MediaTuple { vhost, app, stream_id, "" };
         auto tcp_mode = allArgs["tcp_mode"].as<int>();
         if (allArgs["enable_tcp"].as<int>() && !tcp_mode) {
             // 兼容老版本请求，新版本去除enable_tcp参数并新增tcp_mode参数  [AUTO-TRANSLATED:3b6a5ab5]
@@ -1513,13 +1522,33 @@ void installWebApi() {
             // Compatible with old version requests, the new version removes the only_audio parameter and adds the only_track parameter
             only_track = 1;
         }
+        bool multiplex = allArgs["multiplex"].as<bool>();
+        string jt1078_suffix;
+#if defined(ENABLE_JT1078)
+        int stream_type = allArgs["jtt1078_stream_type"].as<int>();
+        if (stream_type >= kJt1078StreamLive) {
+            multiplex = true;
+            if (allArgs["app"].empty()) {
+                app = kJt1078AppName;
+            }
+            jt1078_suffix = jt1078StreamSuffix(stream_type);
+        }
+        if (stream_id.empty() && stream_type < kJt1078StreamLive) {
+            throw InvalidArgsException("stream_id is required when jtt1078_stream_type < 1");
+        }
+#else
+        if (stream_id.empty()) {
+            throw InvalidArgsException("stream_id is required");
+        }
+#endif
+        auto tuple = MediaTuple { vhost, app, stream_id, "" };
         GET_CONFIG(std::string, s_local_ip, General::kListenIP)
         auto local_ip = s_local_ip;
         if (!allArgs["local_ip"].empty()) {
             local_ip = allArgs["local_ip"];
         }
         auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, allArgs["re_use_port"].as<bool>(),
-                                  allArgs["ssrc"].as<uint32_t>(), only_track);
+                                  allArgs["ssrc"].as<uint32_t>(), only_track, multiplex, jt1078_suffix);
         if (port == 0) {
             throw InvalidArgsException("This stream already exists");
         }
@@ -1688,6 +1717,20 @@ void installWebApi() {
         args.recv_stream_app = allArgs["app"];
         args.recv_stream_vhost = allArgs["vhost"];
         args.enable_origin_recv_limit = allArgs["enable_origin_recv_limit"];
+#if defined(ENABLE_JT1078)
+        if (!allArgs["jt1078_sim"].empty()) {
+            args.jt1078_sim = allArgs["jt1078_sim"];
+        }
+        if (!allArgs["jt1078_channel"].empty()) {
+            args.jt1078_channel = allArgs["jt1078_channel"].as<int>();
+        }
+        if (!allArgs["jt1078_version"].empty()) {
+            args.jt1078_version = allArgs["jt1078_version"];
+        }
+        if (!allArgs["jt1078_seq_mode"].empty()) {
+            args.jt1078_seq_mode = allArgs["jt1078_seq_mode"];
+        }
+#endif
         src->getOwnerPoller()->async([=]() mutable {
             try {
                 src->startSendRtp(args, [val, headerOut, invoker](uint16_t local_port, const SockException &ex) mutable {

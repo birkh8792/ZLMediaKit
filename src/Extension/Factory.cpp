@@ -63,6 +63,7 @@ REGISTER_CODEC(opus_plugin);
 REGISTER_CODEC(g711a_plugin)
 REGISTER_CODEC(g711u_plugin);
 REGISTER_CODEC(l16_plugin);
+REGISTER_CODEC(adpcm_plugin);
 REGISTER_CODEC(mp3_plugin);
 REGISTER_CODEC(mp2v_plugin);
 REGISTER_CODEC(mp2a_plugin);

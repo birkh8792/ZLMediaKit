@@ -134,7 +134,8 @@ private:
     std::shared_ptr<struct sockaddr_storage> _rtcp_addr;
 };
 
-void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
+void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex,
+                      const std::string &jt1078_stream_suffix) {
     // 创建udp服务器  [AUTO-TRANSLATED:99619428]
     // Create UDP server
     auto poller = EventPollerPool::Instance().getPoller();
@@ -173,6 +174,11 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         helper = std::make_shared<RtcpHelper>(std::move(rtcp_socket), tuple);
         helper->startRtcp();
         helper->setRtpServerInfo(local_port, tcp_mode, re_use_port, ssrc, only_track);
+#if defined(ENABLE_JT1078)
+        if (!jt1078_stream_suffix.empty() && helper->getProcess()) {
+            helper->getProcess()->setJt1078StreamSuffix(jt1078_stream_suffix);
+        }
+#endif
         bool bind_peer_addr = false;
         auto ssrc_ptr = std::make_shared<uint32_t>(ssrc);
         _ssrc = ssrc_ptr;
@@ -200,6 +206,9 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         (*udp_server)[RtpSession::kUdpRecvBuffer] = udpRecvSocketBuffer;
         (*udp_server)[RtpSession::kVhost] = tuple.vhost;
         (*udp_server)[RtpSession::kApp] = tuple.app;
+#if defined(ENABLE_JT1078)
+        (*udp_server)[RtpSession::kJt1078StreamSuffix] = jt1078_stream_suffix;
+#endif
         udp_server->start<RtpSession>(local_port, local_ip);
         rtp_socket = nullptr;
     }
@@ -215,6 +224,9 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
         (*tcp_server)[RtpSession::kStreamID] = tuple.stream;
         (*tcp_server)[RtpSession::kSSRC] = ssrc;
         (*tcp_server)[RtpSession::kOnlyTrack] = only_track;
+#if defined(ENABLE_JT1078)
+        (*tcp_server)[RtpSession::kJt1078StreamSuffix] = jt1078_stream_suffix;
+#endif
         if (tcp_mode == PASSIVE) {
             weak_ptr<RtpServer> weak_self = shared_from_this();
             tcp_server->start<RtpSession>(local_port, local_ip, 1024, [weak_self, processor](std::shared_ptr<RtpSession> &session) {

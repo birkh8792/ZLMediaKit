@@ -52,6 +52,7 @@ option(ENABLE_MYSQL "Enable MySQL" OFF)
 option(ENABLE_OPENSSL "Enable OpenSSL" ON)
 option(ENABLE_PLAYER "Enable Player" ON)
 option(ENABLE_RTPPROXY "Enable RTPPROXY" ON)
+option(ENABLE_JT1078 "Enable JT/T 1078 vehicle AV stream" ON)
 option(ENABLE_SERVER "Enable Server" ON)
 option(ENABLE_SERVER_LIB "Enable server as android static library" OFF)
 option(ENABLE_SRT "Enable SRT" ON)
@@ -564,6 +565,10 @@ add_subdirectory(ext-codec)
 
 if(ENABLE_SRT)
   add_subdirectory(srt)
+endif()
+
+if(ENABLE_JT1078)
+  add_subdirectory(jt1078)
 endif()
 
 if(ENABLE_WEBRTC)

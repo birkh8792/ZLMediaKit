@@ -13,6 +13,10 @@
 #include "RtpProcess.h"
 #include "Util/File.h"
 #include "Common/config.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078Process.h"
+#include <functional>
+#endif
 
 using namespace std;
 using namespace toolkit;
@@ -100,6 +104,11 @@ void RtpProcess::createTimer() {
 }
 
 bool RtpProcess::inputRtp(bool is_udp, const Socket::Ptr &sock, const char *data, size_t len, const struct sockaddr *addr, uint64_t *dts_out) {
+#if defined(ENABLE_JT1078)
+    if (_jt1078_mode || isJt1078(data, len)) {
+        return inputJt1078(is_udp, sock, data, len, addr, dts_out);
+    }
+#endif
     if (!isRtp(data, len)) {
         WarnP(this) << "Not rtp packet";
         return false;
@@ -148,6 +157,94 @@ bool RtpProcess::inputRtp(bool is_udp, const Socket::Ptr &sock, const char *data
     }
     return ret;
 }
+
+#if defined(ENABLE_JT1078)
+void RtpProcess::setJt1078StreamSuffix(const string &suffix) {
+    _jt1078_stream_suffix = suffix;
+}
+
+void RtpProcess::tryUpdateStreamFromJt1078(const char *data, size_t len) {
+    if (!_media_info.stream.empty() || !isJt1078(data, len)) {
+        return;
+    }
+    Jt1078ParsedHeader head;
+    if (!parseJt1078Header(data, len, Jt1078Version::Unknown, head)) {
+        return;
+    }
+    _jt1078_sim = jt1078SimToString(head.sim, head.sim_len);
+    _media_info.stream = _jt1078_sim + "_" + to_string((int)head.ch) + _jt1078_stream_suffix;
+    if (_media_info.app.empty() || _media_info.app == kRtpAppName) {
+        _media_info.app = kJt1078AppName;
+    }
+}
+
+uint32_t RtpProcess::makeJt1078FakeSsrc() const {
+    if (_jt1078_sim.empty()) {
+        return 0;
+    }
+    return (uint32_t)std::hash<std::string>{}(_jt1078_sim + _media_info.stream);
+}
+
+bool RtpProcess::inputJt1078(bool is_udp, const Socket::Ptr &sock, const char *data, size_t len, const struct sockaddr *addr, uint64_t *dts_out) {
+    _jt1078_mode = true;
+    if (!_auth_err.empty()) {
+        throw toolkit::SockException(toolkit::Err_other, _auth_err);
+    }
+
+    tryUpdateStreamFromJt1078(data, len);
+
+    if (_sock != sock) {
+        bool first = !_sock;
+        _sock = sock;
+        _addr.reset(new sockaddr_storage(*((sockaddr_storage *)addr)));
+        if (first && !_publish_emitted) {
+            emitOnPublish(makeJt1078FakeSsrc());
+            _publish_emitted = true;
+            _cache_ticker.resetTime();
+        }
+    }
+
+    _total_bytes += len;
+    if (_save_file_rtp) {
+        uint16_t size = (uint16_t)len;
+        size = htons(size);
+        fwrite((uint8_t *)&size, 2, 1, _save_file_rtp.get());
+        fwrite((uint8_t *)data, len, 1, _save_file_rtp.get());
+    }
+
+    if (!_process) {
+        _media_info.protocol = is_udp ? "udp" : "tcp";
+        auto process = std::make_shared<Jt1078Process>(_media_info, this);
+        weak_ptr<RtpProcess> weak_self = shared_from_this();
+        process->setOnStreamIdentified([weak_self](const string &sim, uint8_t channel) {
+            auto strong_self = weak_self.lock();
+            if (!strong_self) {
+                return;
+            }
+            strong_self->_jt1078_sim = sim;
+            if (strong_self->_media_info.stream.empty()) {
+                strong_self->_media_info.stream = sim + "_" + to_string((int)channel) + strong_self->_jt1078_stream_suffix;
+            }
+            if (strong_self->_media_info.app.empty() || strong_self->_media_info.app == kRtpAppName) {
+                strong_self->_media_info.app = kJt1078AppName;
+            }
+        });
+        _process = std::move(process);
+    }
+
+    GET_CONFIG(string, dump_dir, RtpProxy::kDumpDir);
+    if (_muxer && !_muxer->isEnabled() && !dts_out && dump_dir.empty()) {
+        _last_frame_time.resetTime();
+        return false;
+    }
+
+    bool ret = _process ? _process->inputRtp(is_udp, data, len) : false;
+    if (dts_out) {
+        *dts_out = _dts;
+    }
+    return ret;
+}
+#endif // ENABLE_JT1078
 
 bool RtpProcess::inputFrame(const Frame::Ptr &frame) {
     _dts = frame->dts();

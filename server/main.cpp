@@ -24,6 +24,9 @@
 #include "Shell/ShellSession.h"
 #include "Http/WebSocketSession.h"
 #include "Rtp/RtpServer.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078Server.h"
+#endif
 #include "WebApi.h"
 #include "WebHook.h"
 
@@ -338,6 +341,9 @@ int start_main(int argc,char *argv[]) {
         uint16_t httpPort = mINI::Instance()[Http::kPort];
         uint16_t httpsPort = mINI::Instance()[Http::kSSLPort];
         uint16_t rtpPort = mINI::Instance()[RtpProxy::kPort];
+#if defined(ENABLE_JT1078)
+        uint16_t jt1078Port = mINI::Instance()[RtpProxy::kJt1078Port];
+#endif
 
         // 简单的telnet服务器，可用于服务器调试，但是不能使用23端口，否则telnet上了莫名其妙的现象  [AUTO-TRANSLATED:f9324c6e]
         // Simple telnet server, can be used for server debugging, but cannot use port 23, otherwise telnet will have inexplicable phenomena
@@ -364,6 +370,9 @@ int start_main(int argc,char *argv[]) {
         // GB28181 rtp推流端口，支持UDP/TCP  [AUTO-TRANSLATED:8a9b2872]
         // GB28181 rtp push stream port, supports UDP/TCP
         auto rtpServer = std::make_shared<RtpServer>();
+#if defined(ENABLE_JT1078)
+        auto jt1078Server = std::make_shared<Jt1078Server>();
+#endif
 #endif//defined(ENABLE_RTPPROXY)
 
 #if defined(ENABLE_WEBRTC)
@@ -450,6 +459,9 @@ int start_main(int argc,char *argv[]) {
             // 创建rtp服务器  [AUTO-TRANSLATED:873f7f52]
             // create rtp server
             if (rtpPort) { rtpServer->start(rtpPort, listen_ip.c_str()); }
+#if defined(ENABLE_JT1078)
+            if (jt1078Port) { jt1078Server->start(jt1078Port, listen_ip); }
+#endif
 #endif//defined(ENABLE_RTPPROXY)
 
 #if defined(ENABLE_WEBRTC)

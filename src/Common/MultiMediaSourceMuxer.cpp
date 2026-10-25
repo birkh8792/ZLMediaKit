@@ -12,6 +12,9 @@
 #include "Common/config.h"
 #include "MultiMediaSourceMuxer.h"
 #include "Thread/WorkThreadPool.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078Encoder.h"
+#endif
 
 using namespace std;
 using namespace toolkit;
@@ -636,6 +639,47 @@ void MultiMediaSourceMuxer::startSendRtp(const MediaSourceEvent::SendRtpArgs &ar
     cb(0, SockException(Err_other, "该功能未启用，编译时请打开ENABLE_RTPPROXY宏"));
 #endif//ENABLE_RTPPROXY
 }
+
+#if defined(ENABLE_JT1078)
+class Jt1078SocketSender : public Jt1078EncoderImp {
+public:
+    Jt1078SocketSender(toolkit::Socket::Ptr sock, Jt1078Version version, const std::string &sim, uint8_t channel, Jt1078SeqMode seq_mode)
+        : Jt1078EncoderImp(version, sim, channel, 25, seq_mode), _sock(std::move(sock)) {}
+
+protected:
+    void onPacket(toolkit::Buffer::Ptr packet) override {
+        if (_sock) {
+            _sock->send(std::move(packet));
+        }
+    }
+
+private:
+    toolkit::Socket::Ptr _sock;
+};
+
+MultiMediaSourceMuxer::RingType::RingReader::Ptr MultiMediaSourceMuxer::startSendJt1078OnSocket(const toolkit::Socket::Ptr &sock, const std::string &sim,
+                                                                                                 uint8_t channel, const std::string &version,
+                                                                                                 const std::string &seq_mode) {
+    createGopCacheIfNeed();
+    auto ring = _ring;
+    auto poller = getOwnerPoller(MediaSource::NullMediaSource());
+    GET_CONFIG(string, cfg_seq_mode, RtpProxy::kJt1078SeqMode);
+    auto mode = jt1078SeqModeFromString(seq_mode.empty() ? cfg_seq_mode : seq_mode);
+    auto sender = std::make_shared<Jt1078SocketSender>(sock, jt1078VersionFromString(version), sim, channel, mode);
+    for (auto &track : getTracks(false)) {
+        sender->addTrack(track);
+    }
+    sender->addTrackCompleted();
+    auto reader = ring->attach(poller);
+    reader->setReadCB([sender](const Frame::Ptr &frame) { sender->inputFrame(frame); });
+    reader->setDetachCB([sock]() {
+        if (sock) {
+            sock->closeSock();
+        }
+    });
+    return reader;
+}
+#endif // ENABLE_JT1078
 
 bool MultiMediaSourceMuxer::stopSendRtp(const string &ssrc) {
 #if defined(ENABLE_RTPPROXY)

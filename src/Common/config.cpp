@@ -393,6 +393,9 @@ const string kGopCache = RTP_PROXY_FIELD "gop_cache";
 const string kRtpG711DurMs = RTP_PROXY_FIELD "rtp_g711_dur_ms";
 const string kUdpRecvSocketBuffer = RTP_PROXY_FIELD "udp_recv_socket_buffer";
 const std::string kMergeFrame = RTP_PROXY_FIELD "merge_frame";
+const std::string kJt1078Port = RTP_PROXY_FIELD "1078Port";
+const std::string kJt1078Version = RTP_PROXY_FIELD "jtt1078Version";
+const std::string kJt1078SeqMode = RTP_PROXY_FIELD "jtt1078SeqMode";
 
 static onceToken token([]() {
     mINI::Instance()[kDumpDir] = "";
@@ -406,6 +409,9 @@ static onceToken token([]() {
     mINI::Instance()[kRtpG711DurMs] = 100;
     mINI::Instance()[kUdpRecvSocketBuffer] = 4 * 1024 * 1024;
     mINI::Instance()[kMergeFrame] = 1;
+    mINI::Instance()[kJt1078Port] = 1078;
+    mINI::Instance()[kJt1078Version] = "2016";
+    mINI::Instance()[kJt1078SeqMode] = "shared";
 });
 } // namespace RtpProxy
 

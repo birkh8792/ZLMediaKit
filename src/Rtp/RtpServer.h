@@ -57,7 +57,8 @@ public:
      * [AUTO-TRANSLATED:cb9e0717]
      */
     void start(uint16_t local_port, const char *local_ip = "::", const MediaTuple &tuple = MediaTuple{DEFAULT_VHOST, kRtpAppName, "", ""}, TcpMode tcp_mode = PASSIVE,
-               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false);
+               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false,
+               const std::string &jt1078_stream_suffix = "");
 
     /**
      * 连接到tcp服务(tcp主动模式)

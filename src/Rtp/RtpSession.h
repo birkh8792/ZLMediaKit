@@ -28,6 +28,9 @@ public:
     static const std::string kSSRC;
     static const std::string kOnlyTrack;
     static const std::string kUdpRecvBuffer;
+#if defined(ENABLE_JT1078)
+    static const std::string kJt1078StreamSuffix;
+#endif
 
     RtpSession(const toolkit::Socket::Ptr &sock);
     ~RtpSession() override;
@@ -42,6 +45,9 @@ protected:
     // 收到rtp回调  [AUTO-TRANSLATED:446b2cda]
     // Received RTP callback
     void onRtpPacket(const char *data, size_t len) override;
+#if defined(ENABLE_JT1078)
+    void onJt1078Data(const char *data, size_t len);
+#endif
     // RtpSplitter override
     const char *onSearchPacketTail(const char *data, size_t len) override;
     // 搜寻SSRC  [AUTO-TRANSLATED:2cfec2e1]
@@ -56,6 +62,10 @@ private:
     bool _search_rtp = false;
     bool _search_rtp_finished = false;
     bool _emit_detach = false;
+#if defined(ENABLE_JT1078)
+    bool _jt1078_mode = false;
+    std::string _jt1078_stream_suffix;
+#endif
     int _only_track = 0;
     uint32_t _ssrc = 0;
     toolkit::Ticker _ticker;

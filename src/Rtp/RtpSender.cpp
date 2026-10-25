@@ -16,6 +16,10 @@
 #include "Util/uv_errno.h"
 #include "RtpCache.h"
 #include "Rtcp/RtcpContext.h"
+#include "Common/config.h"
+#if defined(ENABLE_JT1078)
+#include "Jt1078Encoder.h"
+#endif
 
 using namespace std;
 using namespace toolkit;
@@ -46,6 +50,15 @@ void RtpSender::startSend(const MediaSourceEvent &sender, const MediaSourceEvent
             case MediaSourceEvent::SendRtpArgs::kRtpPS: _interface = std::make_shared<RtpCachePS>(lam, stoll(args.ssrc), args.pt, true); break;
             case MediaSourceEvent::SendRtpArgs::kRtpTS: _interface = std::make_shared<RtpCachePS>(lam, stoll(args.ssrc), args.pt, false); break;
             case MediaSourceEvent::SendRtpArgs::kRtpES: _interface = std::make_shared<RtpCacheRaw>(lam, stoll(args.ssrc), args.pt, args.only_audio); break;
+#if defined(ENABLE_JT1078)
+            case MediaSourceEvent::SendRtpArgs::kRtpJt1078: {
+                GET_CONFIG(string, cfg_seq_mode, RtpProxy::kJt1078SeqMode);
+                auto seq_mode = jt1078SeqModeFromString(args.jt1078_seq_mode.empty() ? cfg_seq_mode : args.jt1078_seq_mode);
+                auto ver = jt1078VersionFromString(args.jt1078_version);
+                _interface = std::make_shared<RtpCacheJt1078>(lam, ver, args.jt1078_sim, args.jt1078_channel, 25, seq_mode);
+                break;
+            }
+#endif
             default: CHECK(0, "invalid rtp type: " + to_string(args.data_type)); break;
         }
     }
