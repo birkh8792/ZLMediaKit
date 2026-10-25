@@ -409,7 +409,8 @@ static onceToken token([]() {
     mINI::Instance()[kRtpG711DurMs] = 100;
     mINI::Instance()[kUdpRecvSocketBuffer] = 4 * 1024 * 1024;
     mINI::Instance()[kMergeFrame] = 1;
-    mINI::Instance()[kJt1078Port] = 1078;
+    // 0: 不启固定口；收流用 openRtpServer。非 0 时另开 TCP 常驻口（含 HTTP-1078 拉流）
+    mINI::Instance()[kJt1078Port] = 0;
     mINI::Instance()[kJt1078Version] = "2016";
     mINI::Instance()[kJt1078SeqMode] = "shared";
 });

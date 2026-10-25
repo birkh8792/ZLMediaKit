@@ -1498,6 +1498,8 @@ void installWebApi() {
         fillSockInfo(val, process.get());
     });
 
+    // 收 RTP(GB28181) / JT1078 共用；JT1078 由首包 magic 识别，无需 rtp_proxy.1078Port
+    // Optional jtt1078_stream_type: 0 once, 1 live, 2 playback, 4 sub (keep-open => multiplex, app default 1078)
     api_regist("/index/api/openRtpServer",[](API_ARGS_MAP){
         CHECK_SECRET();
         CHECK_ARGS("port");

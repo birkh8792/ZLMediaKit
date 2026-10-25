@@ -215,6 +215,8 @@ bool RtpProcess::inputJt1078(bool is_udp, const Socket::Ptr &sock, const char *d
     if (!_process) {
         _media_info.protocol = is_udp ? "udp" : "tcp";
         auto process = std::make_shared<Jt1078Process>(_media_info, this);
+        GET_CONFIG(string, ver_str, RtpProxy::kJt1078Version);
+        process->setVersion(jt1078VersionFromString(ver_str));
         weak_ptr<RtpProcess> weak_self = shared_from_this();
         process->setOnStreamIdentified([weak_self](const string &sim, uint8_t channel) {
             auto strong_self = weak_self.lock();

@@ -34,6 +34,7 @@ private:
     void resetVideoBuffer();
     bool outputVideoFrame(uint8_t pt, uint64_t dts, bool key);
     bool outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t dts);
+    void handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload);
     bool ensureTrack(CodecId codec, TrackType type);
     void maybeStartFeeding(bool force_single = false);
     void emitFrame(const Frame::Ptr &frame);
@@ -50,6 +51,15 @@ private:
     Jt1078SeqMode _detected_seq_mode = Jt1078SeqMode::Auto;
     std::string _buffer;
     std::string _video_buffer;
+    // 上一帧完整 ES，用于去掉设备/链路重传导致的重复帧（重复帧会严重花屏）
+    std::string _last_emitted_video;
+    bool _video_assembling = false;
+    bool _video_frame_key = false;
+    bool _video_expect_seq_valid = false;
+    uint16_t _video_start_seq = 0;
+    uint16_t _video_expect_seq = 0;
+    uint8_t _video_frame_pt = 98;
+    uint64_t _video_frame_dts = 0;
     bool _video_track_added = false;
     bool _audio_track_added = false;
     bool _audio_track_ignored = false;

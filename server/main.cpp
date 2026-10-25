@@ -460,7 +460,11 @@ int start_main(int argc,char *argv[]) {
             // create rtp server
             if (rtpPort) { rtpServer->start(rtpPort, listen_ip.c_str()); }
 #if defined(ENABLE_JT1078)
-            if (jt1078Port) { jt1078Server->start(jt1078Port, listen_ip); }
+            // 可选固定口；JT1078 收流主路径为 openRtpServer（RtpSession 自动识别）
+            if (jt1078Port) {
+                jt1078Server->start(jt1078Port, listen_ip);
+                InfoL << "JT1078 fixed proxy started on port: " << jt1078Port;
+            }
 #endif
 #endif//defined(ENABLE_RTPPROXY)
 

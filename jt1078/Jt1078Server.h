@@ -16,8 +16,9 @@
 namespace mediakit {
 
 /**
- * JT/T 1078 固定端口代理会话
- * 支持设备 TCP 推流(0x30316364) 与 HTTP GET 拉取 1078 码流
+ * JT/T 1078 固定端口代理会话（可选；rtp_proxy.1078Port!=0 时启用）
+ * 收流主路径请用 openRtpServer + RtpSession 自动识别。
+ * 本会话额外支持：设备 TCP 推流、HTTP GET 拉 1078 裸流。
  */
 class Jt1078ProxySession : public toolkit::Session {
 public:

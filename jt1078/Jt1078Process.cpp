@@ -77,6 +77,71 @@ size_t Jt1078Process::findHeaderPos() const {
 
 void Jt1078Process::resetVideoBuffer() {
     _video_buffer.clear();
+    _video_assembling = false;
+    _video_frame_key = false;
+    _video_frame_dts = 0;
+    _video_expect_seq_valid = false;
+}
+
+void Jt1078Process::handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload) {
+    if (_video_pt < 0) {
+        _video_pt = head.pt;
+    }
+    switch (head.packet_type) {
+        case kJt1078PacketAtomic:
+            resetVideoBuffer();
+            _video_buffer.assign(payload, head.payload_size);
+            outputVideoFrame(head.pt, head.timestamp, head.frame_type == kJt1078FrameI);
+            break;
+        case kJt1078PacketFirst:
+            // 同一 First 重传：清缓冲后仍从该包重新拼，丢掉中间夹杂的旧 Middle
+            if (_video_assembling && _video_expect_seq_valid && head.seq == _video_start_seq
+                && _video_buffer.size() >= head.payload_size
+                && memcmp(_video_buffer.data(), payload, head.payload_size) == 0) {
+                _video_buffer.assign(payload, head.payload_size);
+                _video_expect_seq = (uint16_t)(head.seq + 1);
+                _video_frame_pt = head.pt;
+                _video_frame_dts = head.timestamp;
+                _video_frame_key = (head.frame_type == kJt1078FrameI);
+                break;
+            }
+            // First 开启新帧；若上一帧未收齐 Last，先丢弃残留，避免跨帧粘连
+            resetVideoBuffer();
+            _video_buffer.assign(payload, head.payload_size);
+            _video_assembling = true;
+            _video_frame_pt = head.pt;
+            _video_frame_dts = head.timestamp;
+            _video_frame_key = (head.frame_type == kJt1078FrameI);
+            _video_start_seq = head.seq;
+            _video_expect_seq = (uint16_t)(head.seq + 1);
+            _video_expect_seq_valid = true;
+            break;
+        case kJt1078PacketMiddle:
+            if (!_video_assembling) {
+                break;
+            }
+            // 视频分片序号应连续；乱序/旧重传片直接丢，防止拼进当前帧
+            if (_video_expect_seq_valid && head.seq != _video_expect_seq) {
+                break;
+            }
+            _video_buffer.append(payload, head.payload_size);
+            _video_expect_seq = (uint16_t)(head.seq + 1);
+            _video_expect_seq_valid = true;
+            break;
+        case kJt1078PacketLast:
+            if (!_video_assembling) {
+                break;
+            }
+            if (_video_expect_seq_valid && head.seq != _video_expect_seq) {
+                break;
+            }
+            _video_buffer.append(payload, head.payload_size);
+            outputVideoFrame(_video_frame_pt, _video_frame_dts, _video_frame_key);
+            break;
+        default:
+            resetVideoBuffer();
+            break;
+    }
 }
 
 void Jt1078Process::observeSeq(uint16_t seq, bool is_audio) {
@@ -225,6 +290,11 @@ bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t dts, bool /*key*/) {
     if (_video_buffer.empty()) {
         return false;
     }
+    // 设备常整帧重传；重复 ES 送入解码器会出现大量 missing reference / 花屏
+    if (!_last_emitted_video.empty() && _last_emitted_video == _video_buffer) {
+        resetVideoBuffer();
+        return false;
+    }
     TrackType track_type = TrackInvalid;
     auto codec = jt1078PtToCodec(pt, track_type);
     if (codec == CodecInvalid || !ensureTrack(codec, track_type)) {
@@ -234,7 +304,9 @@ bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t dts, bool /*key*/) {
     _last_dts = dts;
     auto frame = Factory::getFrameFromPtr(codec, _video_buffer.data(), _video_buffer.size(), dts, dts);
     emitFrame(frame);
+    _last_emitted_video.swap(_video_buffer);
     resetVideoBuffer();
+    // reset 清掉了 _video_buffer；swap 后内容在 _last_emitted_video
     return true;
 }
 
@@ -293,15 +365,7 @@ bool Jt1078Process::parseBuffer() {
 
         auto payload = _buffer.data() + head.header_len;
         if (head.frame_type <= kJt1078FrameB) {
-            if (_video_pt < 0) {
-                _video_pt = head.pt;
-            }
-            _video_buffer.append(payload, head.payload_size);
-            if (head.packet_type == kJt1078PacketAtomic || head.packet_type == kJt1078PacketLast) {
-                outputVideoFrame(head.pt, head.timestamp, head.frame_type == kJt1078FrameI);
-            } else if (head.packet_type != kJt1078PacketFirst && head.packet_type != kJt1078PacketMiddle) {
-                resetVideoBuffer();
-            }
+            handleVideoPayload(head, payload);
         } else if (head.frame_type == kJt1078FrameAudio) {
             static const uint8_t kAudioPrefix[] = {0x00, 0x01, 0xa0, 0x00};
             if (head.payload_size > 4 && head.payload_size <= 324
