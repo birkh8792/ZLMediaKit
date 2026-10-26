@@ -2,8 +2,7 @@
  * Copyright (c) 2016-present The ZLMediaKit project authors. All Rights Reserved.
  *
  * 拼帧骨架对齐 https://gitee.com/lvxingjin/ZLM ；
- * 解复用：下一包头已到却非魔数 → 伪同步，硬吃会吞包头进 ES；
- * 拼帧：seq 连续校验；同帧 First 重传忽略（重置会假缺口丢 P 帧致参考花屏）。
+ * 解复用/拼帧防花屏；音频重传丢弃 + Stamp 校正防卡顿。
  */
 
 #if defined(ENABLE_JT1078)
@@ -13,7 +12,6 @@
 #include "Extension/Factory.h"
 #include "Extension/Track.h"
 #include "Util/logger.h"
-#include "Util/util.h"
 
 using namespace std;
 using namespace toolkit;
@@ -62,15 +60,34 @@ uint32_t Jt1078Process::videoCacheKey(uint8_t ch, uint8_t pt, uint8_t frame_type
     return ((uint32_t)ch << 24) | ((uint32_t)pt << 16) | ((uint32_t)frame_type << 8);
 }
 
-uint64_t Jt1078Process::getDts(uint64_t stamp) {
-    if (!stamp) {
-        return getCurrentMillisecond();
+uint64_t Jt1078Process::getDts(uint64_t stamp, bool is_audio) {
+    int64_t dts_out = 0;
+    int64_t pts_out = 0;
+    if (is_audio) {
+        if (!_audio_synced_to_video && _video_track_added) {
+            // 音频对齐视频时间轴，避免设备音视频 stamp 起点不一致导致播几秒就卡
+            _audio_stamp.syncTo(_video_stamp);
+            _audio_synced_to_video = true;
+        }
+        _audio_stamp.revise((int64_t)stamp, (int64_t)stamp, dts_out, pts_out);
+    } else {
+        _video_stamp.revise((int64_t)stamp, (int64_t)stamp, dts_out, pts_out);
     }
-    if (!_stamp_base) {
-        _stamp_base = stamp;
-        _dts_base = getCurrentMillisecond();
+    return (uint64_t)dts_out;
+}
+
+bool Jt1078Process::acceptAudioSeq(uint16_t seq) {
+    if (!_has_audio_out_seq) {
+        _last_audio_out_seq = seq;
+        _has_audio_out_seq = true;
+        return true;
     }
-    return _dts_base + stamp - _stamp_base;
+    // seq 未前进：整段音频重传（dump 中约一半音频包），送入会让 DTS 回退并卡顿
+    if (seqDiff(seq, (uint16_t)(_last_audio_out_seq + 1)) < 0) {
+        return false;
+    }
+    _last_audio_out_seq = seq;
+    return true;
 }
 
 bool Jt1078Process::inputRtp(bool /*is_udp*/, const char *data, size_t data_len) {
@@ -346,7 +363,7 @@ bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t stamp, bool /*key*/, s
         return false;
     }
 
-    const uint64_t dts = getDts(stamp);
+    const uint64_t dts = getDts(stamp, false);
     _last_dts = dts;
 
     Frame::Ptr frame;
@@ -367,7 +384,7 @@ bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t stamp, bool /*key*/, s
     return true;
 }
 
-bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp) {
+bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp, uint16_t seq) {
     if (!data || !len) {
         return false;
     }
@@ -376,7 +393,11 @@ bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, u
     if (codec == CodecInvalid || !ensureTrack(codec, track_type)) {
         return false;
     }
-    const uint64_t dts = getDts(stamp);
+    // 轨就绪后再消费 seq，避免 addTrack 失败时把合法序号吃掉
+    if (!acceptAudioSeq(seq)) {
+        return false;
+    }
+    const uint64_t dts = getDts(stamp, true);
     _last_dts = dts;
     auto frame = Factory::getFrameFromPtr(codec, (char *)data, len, dts, dts);
     emitFrame(frame);
@@ -440,9 +461,9 @@ bool Jt1078Process::parseBuffer() {
             static const uint8_t kAudioPrefix[] = {0x00, 0x01, 0xa0, 0x00};
             if (head.payload_size > 4 && head.payload_size <= 324
                 && (head.payload_size == 324 || head.payload_size == 164 || memcmp(payload, kAudioPrefix, 4) == 0)) {
-                outputAudioFrame(head.pt, payload + 4, head.payload_size - 4, head.timestamp);
+                outputAudioFrame(head.pt, payload + 4, head.payload_size - 4, head.timestamp, head.seq);
             } else {
-                outputAudioFrame(head.pt, payload, head.payload_size, head.timestamp);
+                outputAudioFrame(head.pt, payload, head.payload_size, head.timestamp, head.seq);
             }
         }
         _buffer.erase(0, packet_size);

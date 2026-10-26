@@ -10,6 +10,7 @@
 #include "Jt1078.h"
 #include "Rtp/ProcessInterface.h"
 #include "Common/MediaSource.h"
+#include "Common/Stamp.h"
 #include "Util/TimeTicker.h"
 #include <list>
 #include <unordered_map>
@@ -23,10 +24,10 @@ namespace mediakit {
  *   Atomic 直接出帧；First 清空缓存；Middle 追加；Last 追加后出帧；
  *   缓存 key = channel|PT|frame_type。
  *
- * 花屏根因增强：
- *   1) 解复用：下一包头已到达却不是魔数时视为伪同步，避免吞包头进 ES；
- *   2) 帧内分片 seq 必须连续；旧重传丢弃；向前缺口则整帧丢弃；
- *   3) 同帧 First 重传忽略（勿重置），否则会制造假缺口丢掉 P 帧，后续参考花屏。
+ * 花屏/卡顿增强：
+ *   1) 解复用：下一包头已到却非魔数 → 伪同步，避免吞包头进 ES；
+ *   2) 帧内分片 seq 连续；旧重传丢弃；缺口整帧丢弃；同帧 First 重传忽略；
+ *   3) 音频 seq 回退视为重传丢弃（设备常整段重发），并用 Stamp 校正 DTS，避免播放卡顿。
  */
 class Jt1078Process : public ProcessInterface {
 public:
@@ -56,9 +57,10 @@ private:
     bool parseBuffer();
     void resetVideoCaches();
     static uint32_t videoCacheKey(uint8_t ch, uint8_t pt, uint8_t frame_type);
-    uint64_t getDts(uint64_t stamp);
+    uint64_t getDts(uint64_t stamp, bool is_audio);
+    bool acceptAudioSeq(uint16_t seq);
     bool outputVideoFrame(uint8_t pt, uint64_t stamp, bool key, std::string &buffer);
-    bool outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp);
+    bool outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp, uint16_t seq);
     void handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload);
     // 返回 false 表示该路缓存已因缺口废弃
     bool appendVideoSlice(VideoCache &cache, uint16_t seq, const char *payload, uint16_t payload_size);
@@ -87,8 +89,11 @@ private:
     bool _skip_http_header = false;
     int _video_pt = -1;
     uint64_t _last_dts = 0;
-    uint64_t _stamp_base = 0;
-    uint64_t _dts_base = 0;
+    Stamp _video_stamp;
+    Stamp _audio_stamp;
+    bool _audio_synced_to_video = false;
+    bool _has_audio_out_seq = false;
+    uint16_t _last_audio_out_seq = 0;
     toolkit::Ticker _track_wait_ticker;
     std::list<Frame::Ptr> _pending_frames;
 
