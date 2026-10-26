@@ -12,9 +12,22 @@
 #include "Common/MediaSource.h"
 #include "Util/TimeTicker.h"
 #include <list>
+#include <unordered_map>
 
 namespace mediakit {
 
+/**
+ * JT/T 1078 demux
+ *
+ * 拼帧骨架对齐 https://gitee.com/lvxingjin/ZLM ：
+ *   Atomic 直接出帧；First 清空缓存；Middle 追加；Last 追加后出帧；
+ *   缓存 key = channel|PT|frame_type。
+ *
+ * 花屏根因增强：
+ *   1) 解复用：下一包头已到达却不是魔数时视为伪同步，避免吞包头进 ES；
+ *   2) 帧内分片 seq 必须连续；旧重传丢弃；向前缺口则整帧丢弃；
+ *   3) 同帧 First 重传忽略（勿重置），否则会制造假缺口丢掉 P 帧，后续参考花屏。
+ */
 class Jt1078Process : public ProcessInterface {
 public:
     using Ptr = std::shared_ptr<Jt1078Process>;
@@ -30,11 +43,25 @@ public:
     Jt1078SeqMode getDetectedSeqMode() const { return _detected_seq_mode; }
 
 private:
+    struct VideoCache {
+        std::string buffer;
+        uint8_t pt = 98;
+        uint64_t stamp = 0;
+        bool key = false;
+        bool expect_valid = false;
+        uint16_t expect_seq = 0;
+        uint16_t start_seq = 0;
+    };
+
     bool parseBuffer();
-    void resetVideoBuffer();
-    bool outputVideoFrame(uint8_t pt, uint64_t dts, bool key);
-    bool outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t dts);
+    void resetVideoCaches();
+    static uint32_t videoCacheKey(uint8_t ch, uint8_t pt, uint8_t frame_type);
+    uint64_t getDts(uint64_t stamp);
+    bool outputVideoFrame(uint8_t pt, uint64_t stamp, bool key, std::string &buffer);
+    bool outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp);
     void handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload);
+    // 返回 false 表示该路缓存已因缺口废弃
+    bool appendVideoSlice(VideoCache &cache, uint16_t seq, const char *payload, uint16_t payload_size);
     bool ensureTrack(CodecId codec, TrackType type);
     void maybeStartFeeding(bool force_single = false);
     void emitFrame(const Frame::Ptr &frame);
@@ -50,16 +77,8 @@ private:
     Jt1078Version _version = Jt1078Version::Unknown;
     Jt1078SeqMode _detected_seq_mode = Jt1078SeqMode::Auto;
     std::string _buffer;
-    std::string _video_buffer;
-    // 上一帧完整 ES，用于去掉设备/链路重传导致的重复帧（重复帧会严重花屏）
+    std::unordered_map<uint32_t, VideoCache> _video_caches;
     std::string _last_emitted_video;
-    bool _video_assembling = false;
-    bool _video_frame_key = false;
-    bool _video_expect_seq_valid = false;
-    uint16_t _video_start_seq = 0;
-    uint16_t _video_expect_seq = 0;
-    uint8_t _video_frame_pt = 98;
-    uint64_t _video_frame_dts = 0;
     bool _video_track_added = false;
     bool _audio_track_added = false;
     bool _audio_track_ignored = false;
@@ -68,10 +87,11 @@ private:
     bool _skip_http_header = false;
     int _video_pt = -1;
     uint64_t _last_dts = 0;
+    uint64_t _stamp_base = 0;
+    uint64_t _dts_base = 0;
     toolkit::Ticker _track_wait_ticker;
     std::list<Frame::Ptr> _pending_frames;
 
-    // seq 自适应检测
     bool _has_video_seq = false;
     bool _has_audio_seq = false;
     uint16_t _last_video_seq = 0;

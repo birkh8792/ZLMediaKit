@@ -111,6 +111,10 @@ static bool fillFromBytes(const uint8_t *data, size_t len, size_t sim_len, Jt107
         out.payload_size = (uint16_t)jt1078ReadBe16(data + off);
         off += 2;
     }
+    // JT/T 1078 单包体最大 950；0 或超限基本是伪同步头
+    if (out.payload_size == 0 || out.payload_size > kJt1078MaxPayload) {
+        return false;
+    }
     out.header_len = off;
     out.version = (sim_len == 10) ? Jt1078Version::V2019 : Jt1078Version::V2013;
     return true;

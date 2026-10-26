@@ -1,5 +1,9 @@
 /*
  * Copyright (c) 2016-present The ZLMediaKit project authors. All Rights Reserved.
+ *
+ * 拼帧骨架对齐 https://gitee.com/lvxingjin/ZLM ；
+ * 解复用：下一包头已到却非魔数 → 伪同步，硬吃会吞包头进 ES；
+ * 拼帧：seq 连续校验；同帧 First 重传忽略（重置会假缺口丢 P 帧致参考花屏）。
  */
 
 #if defined(ENABLE_JT1078)
@@ -9,17 +13,33 @@
 #include "Extension/Factory.h"
 #include "Extension/Track.h"
 #include "Util/logger.h"
+#include "Util/util.h"
 
 using namespace std;
 using namespace toolkit;
 
 namespace mediakit {
 
+static bool findStartCode(const char *data, size_t len, size_t &prefix) {
+    if (len >= 4 && (uint8_t)data[0] == 0 && (uint8_t)data[1] == 0 && (uint8_t)data[2] == 0 && (uint8_t)data[3] == 1) {
+        prefix = 4;
+        return true;
+    }
+    if (len >= 3 && (uint8_t)data[0] == 0 && (uint8_t)data[1] == 0 && (uint8_t)data[2] == 1) {
+        prefix = 3;
+        return true;
+    }
+    return false;
+}
+
+static int16_t seqDiff(uint16_t got, uint16_t expect) {
+    return (int16_t)(got - expect);
+}
+
 Jt1078Process::Jt1078Process(const MediaInfo &media_info, MediaSinkInterface *sink) {
     _media_info = media_info;
     _interface = sink;
     _buffer.reserve(64 * 1024);
-    _video_buffer.reserve(512 * 1024);
 }
 
 void Jt1078Process::setOnStreamIdentified(onStreamIdentified cb) {
@@ -31,9 +51,26 @@ void Jt1078Process::setVersion(Jt1078Version version) {
 }
 
 void Jt1078Process::flush() {
-    if (!_video_buffer.empty()) {
-        resetVideoBuffer();
+    resetVideoCaches();
+}
+
+void Jt1078Process::resetVideoCaches() {
+    _video_caches.clear();
+}
+
+uint32_t Jt1078Process::videoCacheKey(uint8_t ch, uint8_t pt, uint8_t frame_type) {
+    return ((uint32_t)ch << 24) | ((uint32_t)pt << 16) | ((uint32_t)frame_type << 8);
+}
+
+uint64_t Jt1078Process::getDts(uint64_t stamp) {
+    if (!stamp) {
+        return getCurrentMillisecond();
     }
+    if (!_stamp_base) {
+        _stamp_base = stamp;
+        _dts_base = getCurrentMillisecond();
+    }
+    return _dts_base + stamp - _stamp_base;
 }
 
 bool Jt1078Process::inputRtp(bool /*is_udp*/, const char *data, size_t data_len) {
@@ -44,7 +81,7 @@ bool Jt1078Process::inputRtp(bool /*is_udp*/, const char *data, size_t data_len)
     if (_buffer.size() > kJt1078CacheSize) {
         WarnL << "JT1078 buffer overflow, clear cache: " << _media_info.shortUrl();
         _buffer.clear();
-        resetVideoBuffer();
+        resetVideoCaches();
         return false;
     }
     skipHttpHeaderIfNeeded();
@@ -75,71 +112,82 @@ size_t Jt1078Process::findHeaderPos() const {
     return string::npos;
 }
 
-void Jt1078Process::resetVideoBuffer() {
-    _video_buffer.clear();
-    _video_assembling = false;
-    _video_frame_key = false;
-    _video_frame_dts = 0;
-    _video_expect_seq_valid = false;
+bool Jt1078Process::appendVideoSlice(VideoCache &cache, uint16_t seq, const char *payload, uint16_t payload_size) {
+    if (!cache.expect_valid) {
+        return false;
+    }
+    const auto diff = seqDiff(seq, cache.expect_seq);
+    if (diff == 0) {
+        cache.buffer.append(payload, payload_size);
+        cache.expect_seq = (uint16_t)(seq + 1);
+        return true;
+    }
+    if (diff < 0) {
+        // 旧片/精确重传：丢弃，继续等期望序号
+        return true;
+    }
+    // 向前缺口：本帧已不可恢复，整帧丢弃。硬拼会把非法 NAL 送进解码器导致花屏。
+    return false;
 }
 
 void Jt1078Process::handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload) {
     if (_video_pt < 0) {
         _video_pt = head.pt;
     }
+    const bool is_key = (head.frame_type == kJt1078FrameI);
+    const auto key = videoCacheKey(head.ch, head.pt, head.frame_type);
+
     switch (head.packet_type) {
-        case kJt1078PacketAtomic:
-            resetVideoBuffer();
-            _video_buffer.assign(payload, head.payload_size);
-            outputVideoFrame(head.pt, head.timestamp, head.frame_type == kJt1078FrameI);
+        case kJt1078PacketAtomic: {
+            string buf;
+            buf.assign(payload, head.payload_size);
+            outputVideoFrame(head.pt, head.timestamp, is_key, buf);
             break;
-        case kJt1078PacketFirst:
-            // 同一 First 重传：清缓冲后仍从该包重新拼，丢掉中间夹杂的旧 Middle
-            if (_video_assembling && _video_expect_seq_valid && head.seq == _video_start_seq
-                && _video_buffer.size() >= head.payload_size
-                && memcmp(_video_buffer.data(), payload, head.payload_size) == 0) {
-                _video_buffer.assign(payload, head.payload_size);
-                _video_expect_seq = (uint16_t)(head.seq + 1);
-                _video_frame_pt = head.pt;
-                _video_frame_dts = head.timestamp;
-                _video_frame_key = (head.frame_type == kJt1078FrameI);
+        }
+        case kJt1078PacketFirst: {
+            auto &cache = _video_caches[key];
+            // 同帧 First 重传：忽略，保留已拼分片。
+            // 设备常见模式 First, Mid, First(重传), Mid...；若此处重置，
+            // expect 回退会把后续合法片判成缺口并丢整帧，GOP 内参考花屏。
+            if (cache.expect_valid && cache.start_seq == head.seq && cache.stamp == head.timestamp) {
                 break;
             }
-            // First 开启新帧；若上一帧未收齐 Last，先丢弃残留，避免跨帧粘连
-            resetVideoBuffer();
-            _video_buffer.assign(payload, head.payload_size);
-            _video_assembling = true;
-            _video_frame_pt = head.pt;
-            _video_frame_dts = head.timestamp;
-            _video_frame_key = (head.frame_type == kJt1078FrameI);
-            _video_start_seq = head.seq;
-            _video_expect_seq = (uint16_t)(head.seq + 1);
-            _video_expect_seq_valid = true;
+            // 新 First：清空该路缓存并建立期望序号（对齐 ZLM）
+            cache.buffer.assign(payload, head.payload_size);
+            cache.pt = head.pt;
+            cache.stamp = head.timestamp;
+            cache.key = is_key;
+            cache.start_seq = head.seq;
+            cache.expect_seq = (uint16_t)(head.seq + 1);
+            cache.expect_valid = true;
             break;
-        case kJt1078PacketMiddle:
-            if (!_video_assembling) {
+        }
+        case kJt1078PacketMiddle: {
+            auto it = _video_caches.find(key);
+            if (it == _video_caches.end() || !it->second.expect_valid) {
                 break;
             }
-            // 视频分片序号应连续；乱序/旧重传片直接丢，防止拼进当前帧
-            if (_video_expect_seq_valid && head.seq != _video_expect_seq) {
-                break;
+            if (!appendVideoSlice(it->second, head.seq, payload, head.payload_size)) {
+                // 缺口：丢弃本帧，不输出坏 ES（下一 First 再开新帧）
+                _video_caches.erase(it);
             }
-            _video_buffer.append(payload, head.payload_size);
-            _video_expect_seq = (uint16_t)(head.seq + 1);
-            _video_expect_seq_valid = true;
             break;
-        case kJt1078PacketLast:
-            if (!_video_assembling) {
+        }
+        case kJt1078PacketLast: {
+            auto it = _video_caches.find(key);
+            if (it == _video_caches.end() || !it->second.expect_valid) {
                 break;
             }
-            if (_video_expect_seq_valid && head.seq != _video_expect_seq) {
+            if (!appendVideoSlice(it->second, head.seq, payload, head.payload_size)) {
+                _video_caches.erase(it);
                 break;
             }
-            _video_buffer.append(payload, head.payload_size);
-            outputVideoFrame(_video_frame_pt, _video_frame_dts, _video_frame_key);
+            outputVideoFrame(head.pt, head.timestamp, is_key || it->second.key, it->second.buffer);
+            _video_caches.erase(key);
             break;
+        }
         default:
-            resetVideoBuffer();
+            _video_caches.erase(key);
             break;
     }
 }
@@ -190,7 +238,6 @@ void Jt1078Process::observeSeq(uint16_t seq, bool is_audio) {
 }
 
 Track::Ptr Jt1078Process::createAudioTrack(CodecId codec) const {
-    // G711/AAC/MP3/ADPCM 走 Factory 插件；其余部标音频用通用轨
     switch (codec) {
         case CodecG711A:
         case CodecG711U:
@@ -226,7 +273,6 @@ void Jt1078Process::maybeStartFeeding(bool force_single) {
     }
     GET_CONFIG(uint32_t, kMaxAddTrackMS, General::kWaitAddTrackMS);
     const bool both_ready = _video_track_added && _audio_track_added;
-    // 仅一路：音轨已放弃，或等待对端轨超时（默认与 wait_add_track_ms 一致）
     const bool only_video = _video_track_added && (_audio_track_ignored || !_audio_track_added);
     const bool only_audio = _audio_track_added && !_video_track_added;
     const bool single_timeout = (only_video || only_audio) && _track_wait_ticker.elapsedTime() > kMaxAddTrackMS;
@@ -272,7 +318,6 @@ bool Jt1078Process::ensureTrack(CodecId codec, TrackType type) {
         return false;
     }
     if (!_interface->addTrack(track)) {
-        // 已被 MediaSink 判 ready（例如旧逻辑/超时），不再重试以免刷屏
         WarnL << "JT1078 add audio track failed: " << getCodecName(codec) << ", stream=" << _media_info.shortUrl();
         _audio_track_ignored = true;
         maybeStartFeeding(true);
@@ -286,31 +331,43 @@ bool Jt1078Process::ensureTrack(CodecId codec, TrackType type) {
     return true;
 }
 
-bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t dts, bool /*key*/) {
-    if (_video_buffer.empty()) {
+bool Jt1078Process::outputVideoFrame(uint8_t pt, uint64_t stamp, bool /*key*/, string &buffer) {
+    if (buffer.empty()) {
         return false;
     }
-    // 设备常整帧重传；重复 ES 送入解码器会出现大量 missing reference / 花屏
-    if (!_last_emitted_video.empty() && _last_emitted_video == _video_buffer) {
-        resetVideoBuffer();
+    if (!_last_emitted_video.empty() && _last_emitted_video == buffer) {
+        buffer.clear();
         return false;
     }
     TrackType track_type = TrackInvalid;
     auto codec = jt1078PtToCodec(pt, track_type);
     if (codec == CodecInvalid || !ensureTrack(codec, track_type)) {
-        resetVideoBuffer();
+        buffer.clear();
         return false;
     }
+
+    const uint64_t dts = getDts(stamp);
     _last_dts = dts;
-    auto frame = Factory::getFrameFromPtr(codec, _video_buffer.data(), _video_buffer.size(), dts, dts);
+
+    Frame::Ptr frame;
+    size_t prefix = 0;
+    if ((codec == CodecH264 || codec == CodecH265) && !findStartCode(buffer.data(), buffer.size(), prefix)) {
+        string payload;
+        payload.reserve(4 + buffer.size());
+        payload.append("\x00\x00\x00\x01", 4);
+        payload.append(buffer);
+        frame = Factory::getFrameFromPtr(codec, payload.data(), payload.size(), dts, dts);
+        frame = Frame::getCacheAbleFrame(frame);
+    } else {
+        frame = Factory::getFrameFromPtr(codec, buffer.data(), buffer.size(), dts, dts);
+    }
     emitFrame(frame);
-    _last_emitted_video.swap(_video_buffer);
-    resetVideoBuffer();
-    // reset 清掉了 _video_buffer；swap 后内容在 _last_emitted_video
+    _last_emitted_video.swap(buffer);
+    buffer.clear();
     return true;
 }
 
-bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t dts) {
+bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, uint64_t stamp) {
     if (!data || !len) {
         return false;
     }
@@ -319,6 +376,7 @@ bool Jt1078Process::outputAudioFrame(uint8_t pt, const char *data, size_t len, u
     if (codec == CodecInvalid || !ensureTrack(codec, track_type)) {
         return false;
     }
+    const uint64_t dts = getDts(stamp);
     _last_dts = dts;
     auto frame = Factory::getFrameFromPtr(codec, (char *)data, len, dts, dts);
     emitFrame(frame);
@@ -341,7 +399,6 @@ bool Jt1078Process::parseBuffer() {
 
         Jt1078ParsedHeader head;
         if (!parseJt1078Header(_buffer.data(), _buffer.size(), _version, head)) {
-            // 魔数对但头字段非法：跳过 1 字节继续搜
             if (_buffer.size() > 4 && isJt1078(_buffer.data(), _buffer.size())) {
                 _buffer.erase(0, 1);
                 continue;
@@ -352,8 +409,21 @@ bool Jt1078Process::parseBuffer() {
             _version = head.version;
         }
 
-        if (_buffer.size() < head.header_len + head.payload_size) {
+        const size_t packet_size = head.header_len + head.payload_size;
+        if (_buffer.size() < packet_size) {
             break;
+        }
+        // 包边界校验：缓冲里若还有后续数据，切完本包后必须落到下一包魔数。
+        // 伪同步头会把后续包头吞进 ES，是 dump 实测花屏的主因。
+        if (_buffer.size() > packet_size) {
+            if (_buffer.size() < packet_size + 4) {
+                // 后续不足一个魔数，等更多 TCP 数据再确认边界
+                break;
+            }
+            if (!isJt1078(_buffer.data() + packet_size, 4)) {
+                _buffer.erase(0, 1);
+                continue;
+            }
         }
 
         if (!_stream_identified && _on_stream_identified) {
@@ -375,8 +445,7 @@ bool Jt1078Process::parseBuffer() {
                 outputAudioFrame(head.pt, payload, head.payload_size, head.timestamp);
             }
         }
-        // other 类型忽略
-        _buffer.erase(0, head.header_len + head.payload_size);
+        _buffer.erase(0, packet_size);
         parsed = true;
     }
     return parsed;
