@@ -24,10 +24,11 @@ namespace mediakit {
  *   Atomic 直接出帧；First 清空缓存；Middle 追加；Last 追加后出帧；
  *   缓存 key = channel|PT|frame_type。
  *
- * 花屏/卡顿增强：
+ * 花屏/卡顿/无法解析增强：
  *   1) 解复用：下一包头已到却非魔数 → 伪同步，避免吞包头进 ES；
- *   2) 帧内分片 seq 连续；旧重传丢弃；缺口整帧丢弃；同帧 First 重传忽略；
- *   3) 音频 seq 回退视为重传丢弃（设备常整段重发），并用 Stamp 校正 DTS，避免播放卡顿。
+ *   2) 帧内按学习到的序号步长连续（常见 1，部分车载 2），步长跨帧复用；
+ *   3) 兼容终端 seq 低字节溢出未进位（含 First：1024 写成 768）；
+ *   4) 同帧 First 重传忽略；音频 seq 回退丢弃 + Stamp 校正 DTS。
  */
 class Jt1078Process : public ProcessInterface {
 public:
@@ -50,7 +51,8 @@ private:
         uint64_t stamp = 0;
         bool key = false;
         bool expect_valid = false;
-        uint16_t expect_seq = 0;
+        uint16_t last_seq = 0;  // 已拼入的最后分片序号
+        uint16_t seq_step = 0;  // 0=未学习；常见 1，部分车载视频为 2
         uint16_t start_seq = 0;
     };
 
@@ -94,6 +96,7 @@ private:
     bool _audio_synced_to_video = false;
     bool _has_audio_out_seq = false;
     uint16_t _last_audio_out_seq = 0;
+    uint16_t _video_seq_step = 0; // 跨帧复用的视频分片步长（1 或 2）
     toolkit::Ticker _track_wait_ticker;
     std::list<Frame::Ptr> _pending_frames;
 

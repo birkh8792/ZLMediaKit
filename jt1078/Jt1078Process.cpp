@@ -2,7 +2,7 @@
  * Copyright (c) 2016-present The ZLMediaKit project authors. All Rights Reserved.
  *
  * 拼帧骨架对齐 https://gitee.com/lvxingjin/ZLM ；
- * 解复用/拼帧防花屏；音频重传丢弃 + Stamp 校正防卡顿。
+ * 解复用防伪同步；分片按学习步长连续；音频重传丢弃 + Stamp 防卡顿。
  */
 
 #if defined(ENABLE_JT1078)
@@ -133,18 +133,79 @@ bool Jt1078Process::appendVideoSlice(VideoCache &cache, uint16_t seq, const char
     if (!cache.expect_valid) {
         return false;
     }
-    const auto diff = seqDiff(seq, cache.expect_seq);
-    if (diff == 0) {
+    if (cache.seq_step == 0) {
+        if (_video_seq_step) {
+            cache.seq_step = _video_seq_step;
+        } else {
+            const auto raw = seqDiff(seq, cache.last_seq);
+            if (raw <= 0) {
+                return true;
+            }
+            if (raw > 16) {
+                // First 也可能进位失败：真实 First=1024，线上写成 768，下一片 1026
+                for (uint16_t try_step : {uint16_t(2), uint16_t(1)}) {
+                    const uint16_t real_first = (uint16_t)(seq - try_step);
+                    if ((real_first & 0xFF) == 0 && cache.last_seq == (uint16_t)(real_first - 0x100)) {
+                        cache.start_seq = real_first;
+                        cache.last_seq = real_first;
+                        cache.seq_step = try_step;
+                        _video_seq_step = try_step;
+                        break;
+                    }
+                }
+                if (cache.seq_step == 0) {
+                    return false;
+                }
+                // 步长已按进位修正建立，继续按正常路径吃掉当前片
+            } else if (raw <= 2) {
+                cache.seq_step = (uint16_t)raw;
+                _video_seq_step = cache.seq_step;
+                cache.buffer.append(payload, payload_size);
+                cache.last_seq = seq;
+                return true;
+            } else {
+                // raw=4/6/… 多半是中间缺片，不能当成步长（否则后续全部错位花屏）
+                cache.seq_step = (raw % 2 == 0) ? 2 : 1;
+                _video_seq_step = cache.seq_step;
+            }
+        }
+    }
+
+    uint16_t last = cache.last_seq;
+    const uint16_t step = cache.seq_step;
+    // 仅收到 First 时纠正 First 自身的进位错误（sticky 步长已建立的情况）
+    if (last == cache.start_seq) {
+        const uint16_t real_first = (uint16_t)(seq - step);
+        if ((real_first & 0xFF) == 0 && last == (uint16_t)(real_first - 0x100)) {
+            cache.start_seq = real_first;
+            cache.last_seq = real_first;
+            last = real_first;
+        }
+    }
+    const uint16_t expect = (uint16_t)(last + step);
+    if (seq == expect) {
         cache.buffer.append(payload, payload_size);
-        cache.expect_seq = (uint16_t)(seq + 1);
+        cache.last_seq = seq;
         return true;
     }
-    if (diff < 0) {
-        // 旧片/精确重传：丢弃，继续等期望序号
+    // 分片序号低字节溢出未进位：254,0,258 实为 254,256,258
+    if (((last & 0xFF) + step) >= 0x100) {
+        const uint16_t buggy = (uint16_t)((last & 0xFF00) | (uint8_t)(last + step));
+        if (seq == buggy) {
+            cache.buffer.append(payload, payload_size);
+            cache.last_seq = expect;
+            return true;
+        }
+    }
+
+    const auto raw = seqDiff(seq, last);
+    if (raw <= 0) {
         return true;
     }
-    // 向前缺口：本帧已不可恢复，整帧丢弃。硬拼会把非法 NAL 送进解码器导致花屏。
-    return false;
+    if (raw > (int16_t)step) {
+        return false;
+    }
+    return true;
 }
 
 void Jt1078Process::handleVideoPayload(const Jt1078ParsedHeader &head, const char *payload) {
@@ -169,13 +230,14 @@ void Jt1078Process::handleVideoPayload(const Jt1078ParsedHeader &head, const cha
             if (cache.expect_valid && cache.start_seq == head.seq && cache.stamp == head.timestamp) {
                 break;
             }
-            // 新 First：清空该路缓存并建立期望序号（对齐 ZLM）
+            // 新 First：清空该路缓存；已学步长跨帧复用（对齐 ZLM 骨架）
             cache.buffer.assign(payload, head.payload_size);
             cache.pt = head.pt;
             cache.stamp = head.timestamp;
             cache.key = is_key;
             cache.start_seq = head.seq;
-            cache.expect_seq = (uint16_t)(head.seq + 1);
+            cache.last_seq = head.seq;
+            cache.seq_step = _video_seq_step;
             cache.expect_valid = true;
             break;
         }
